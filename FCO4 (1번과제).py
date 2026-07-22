@@ -7,11 +7,9 @@ from tkinter import messagebox, scrolledtext
 import requests
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
 
 
 CONFIG_FILE = Path(__file__).with_name("config.json")
@@ -50,6 +48,14 @@ class FCReportApp:
             fg="white",
         )
         self.report_button.pack(side=tk.LEFT, padx=5)
+        self.more_report_button = tk.Button(
+            button_frame,
+            text="➕ 3경기 더 보기",
+            command=self.start_more_report_thread,
+            width=14,
+            state=tk.DISABLED,
+        )
+        self.more_report_button.pack(side=tk.LEFT, padx=5)
         self.login_button = tk.Button(
             button_frame,
             text="🌐 웹 로그인",
@@ -135,15 +141,31 @@ class FCReportApp:
             self.log("⚠️ 설정 파일을 읽을 수 없습니다.")
 
     def start_report_thread(self) -> None:
+        """처음 3경기를 조회하고, 다음 조회 위치를 초기화한다."""
+        self.start_report_request(offset=0, clear_previous=True)
+
+    def start_more_report_thread(self) -> None:
+        """이미 조회한 경기 다음부터 3경기를 추가 조회한다."""
+        self.start_report_request(offset=self.next_match_offset, clear_previous=False)
+
+    def start_report_request(self, offset: int, clear_previous: bool) -> None:
         api_key = self.entry_api_key.get().strip()
         nickname = self.entry_nickname.get().strip()
         if not api_key or not nickname:
             messagebox.showwarning("경고", "API Key와 구단주명을 모두 입력해 주세요.")
             return
         self.report_button.configure(state=tk.DISABLED)
-        threading.Thread(target=self.fetch_report, args=(api_key, nickname), daemon=True).start()
+        self.more_report_button.configure(state=tk.DISABLED)
+        threading.Thread(
+            target=self.fetch_report,
+            args=(api_key, nickname, offset, clear_previous),
+            daemon=True,
+        ).start()
 
-    def fetch_report(self, api_key: str, nickname: str) -> None:
+    def fetch_report(
+        self, api_key: str, nickname: str, offset: int, clear_previous: bool
+    ) -> None:
+        match_ids: list[str] = []
         try:
             headers = {"x-nxopen-api-key": api_key}
             self.log(f"🔍 [{nickname}] 님의 OUID 조회 중...")
@@ -160,7 +182,7 @@ class FCReportApp:
             response = requests.get(
                 f"{API_BASE_URL}/user/match",
                 headers=headers,
-                params={"ouid": ouid, "matchtype": 50, "offset": 0, "limit": 3},
+                params={"ouid": ouid, "matchtype": 50, "offset": offset, "limit": 3},
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
@@ -169,7 +191,8 @@ class FCReportApp:
                 self.log("최근 공식경기 기록이 없습니다.")
                 return
 
-            self.log(f"===== ⚽ [{nickname}] 님의 최근 {len(match_ids)}경기 요약 =====")
+            heading = "최근" if clear_previous else "추가"
+            self.log(f"===== ⚽ [{nickname}] 님의 {heading} {len(match_ids)}경기 요약 =====")
             for index, match_id in enumerate(match_ids, 1):
                 detail = requests.get(
                     f"{API_BASE_URL}/match-detail", headers=headers, params={"matchid": match_id}, timeout=REQUEST_TIMEOUT_SECONDS
@@ -190,7 +213,20 @@ class FCReportApp:
         except (ValueError, TypeError) as error:
             self.log(f"❌ API 응답 처리 오류: {error}")
         finally:
-            self.root.after(0, lambda: self.report_button.configure(state=tk.NORMAL))
+            self.root.after(
+                0,
+                lambda: self.set_report_controls(
+                    next_offset=offset + len(match_ids),
+                    can_load_more=len(match_ids) == 3,
+                ),
+            )
+
+    def set_report_controls(self, next_offset: int, can_load_more: bool) -> None:
+        self.next_match_offset = next_offset
+        self.report_button.configure(state=tk.NORMAL)
+        self.more_report_button.configure(
+            state=tk.NORMAL if can_load_more else tk.DISABLED
+        )
 
     def start_login_thread(self) -> None:
         nexon_id = self.entry_id.get().strip()
@@ -204,18 +240,21 @@ class FCReportApp:
     def run_selenium_login(self, nexon_id: str, nexon_pw: str) -> None:
         self.log("🌐 브라우저를 실행하고 로그인을 시작합니다...")
         try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
-            driver.get("https://nid.nexon.com/login/login.aspx")
+            # Selenium 4.6+의 Selenium Manager가 설치된 Chrome과 맞는 드라이버를 자동 선택한다.
+            # webdriver-manager 패키지나 별도 chromedriver 설치는 필요하지 않다.
+            driver = webdriver.Chrome()
+            driver.get("https://nxlogin.nexon.com/common/login.aspx?redirect=https%3A%2F%2Ffconline.nexon.com%2Fmain%2Findex")
             wait = WebDriverWait(driver, 15)
-            wait.until(EC.visibility_of_element_located((By.ID, "txtid"))).send_keys(nexon_id)
-            wait.until(EC.visibility_of_element_located((By.ID, "txtpwd"))).send_keys(nexon_pw)
-            wait.until(EC.element_to_be_clickable((By.ID, "btnLogin"))).click()
+            wait.until(EC.visibility_of_element_located((By.ID, "txtNexonID"))).send_keys(nexon_id)
+            wait.until(EC.visibility_of_element_located((By.ID, "txtPWD"))).send_keys(nexon_pw)
+            wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, ".button01"))).click()
             self.log("✅ 로그인 요청을 보냈습니다. CAPTCHA·2단계 인증은 브라우저에서 직접 완료해 주세요.")
             self.log("🌐 로그인 완료 후 브라우저에서 FC 온라인을 계속 이용할 수 있습니다.")
         except TimeoutException:
             self.log("❌ 로그인 페이지 요소를 찾지 못했습니다. 페이지 구조가 변경됐을 수 있습니다.")
         except Exception as error:
-            self.log(f"❌ 자동화 중 오류 발생: {error}")
+            self.log(f"❌ 브라우저 실행 또는 로그인 오류: {error}")
+            self.log("💡 Chrome 설치 여부와 인터넷 연결을 확인한 뒤 다시 시도해 주세요.")
         finally:
             self.root.after(0, lambda: self.login_button.configure(state=tk.NORMAL))
 
