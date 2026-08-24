@@ -1,0 +1,27 @@
+{
+  "name": "fc-online-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FC Online match dashboard built with Electron, React, and TypeScript",
+  "main": "out/main/main.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron-vite": "^5.0.0",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "electron": "latest",
+    "typescript": "latest",
+    "vite": "^7.3.6"
+  }
+}
