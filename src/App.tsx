@@ -1,32 +1,11 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { formatNexonDate } from "../shared/nexon";
+import { RankerView, TradeView } from "./components/FeatureViews";
+import PlayerPhoto from "./components/PlayerPhoto";
 
 type DetailTab = "summary" | "stats" | "lineup" | "shots";
 const resultLabel: Record<string, string> = { 승: "WIN", 패: "LOSS", 무: "DRAW" };
 const tabLabels: Record<DetailTab, string> = { summary: "요약", stats: "통계", lineup: "라인업", shots: "슛맵" };
-
-function nexonDate(value: string): Date {
-  return new Date(/[zZ]|[+-]\d{2}:\d{2}$/.test(value) ? value : `${value}Z`);
-}
-
-function formatNexonDate(value: string, dateOnly = false): string {
-  return dateOnly
-    ? nexonDate(value).toLocaleDateString("ko-KR", { timeZone: "Asia/Seoul" })
-    : nexonDate(value).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
-}
-
-function PlayerPhoto({ player, compact = false }: { player: PlayerSummary; compact?: boolean }) {
-  return (
-    <div className={`player-photo ${compact ? "compact" : ""}`}>
-      <span>{player.name.slice(0, 1)}</span>
-      <img src={player.imageUrls[0]} alt={player.name} onError={(event) => {
-        const image = event.currentTarget;
-        const next = Number(image.dataset.index ?? 0) + 1;
-        if (next < player.imageUrls.length) { image.dataset.index = String(next); image.src = player.imageUrls[next]; }
-        else image.style.display = "none";
-      }} />
-    </div>
-  );
-}
 
 function StatRow({ label, mine, opponent, unit = "" }: { label: string; mine: number | null; opponent: number | null; unit?: string }) {
   const total = (mine ?? 0) + (opponent ?? 0);
@@ -105,28 +84,19 @@ function MatchDetail({ match, myNickname, onBack }: { match: MatchSummary; myNic
   </section>;
 }
 
-function TradeView({ trades, loading }: { trades: TradeRecord[]; loading: boolean }) {
-  const totals = trades.reduce((sum,item)=>{sum[item.type]+=item.value;return sum;},{buy:0,sell:0});
-  return <div className="feature-view"><div className="section-heading"><div><p className="eyebrow">TRANSFER MARKET</p><h2>최근 거래 기록</h2></div></div>
-    {loading?<div className="empty">거래 기록을 불러오는 중…</div>:<><div className="trade-summary"><div><small>구매 합계</small><b>{totals.buy.toLocaleString()} BP</b></div><div><small>판매 합계</small><b>{totals.sell.toLocaleString()} BP</b></div><div><small>순거래</small><b>{(totals.sell-totals.buy).toLocaleString()} BP</b></div></div><div className="trade-list">{trades.map(item=><div className="trade-row" key={`${item.type}-${item.saleSn}`}><span className={`trade-type ${item.type}`}>{item.type==="buy"?"구매":"판매"}</span>{item.seasonImageUrl?<img src={item.seasonImageUrl} alt=""/>:<span/>}<div><b>{item.playerName}</b><small>{item.seasonName} · +{item.grade}강</small></div><strong>{item.value.toLocaleString()} BP</strong><time>{formatNexonDate(item.tradeDate)}</time></div>)}</div></>}
-  </div>;
-}
-
-function RankerView({ rankers, loading }: { rankers: RankerRecord[]; loading: boolean }) {
-  return <div className="feature-view"><div className="section-heading"><div><p className="eyebrow">TOP 10,000 BENCHMARK</p><h2>랭커 선수 평균</h2></div></div>{loading?<div className="empty">랭커 통계를 분석하는 중…</div>:<div className="ranker-grid">{rankers.map(item=><article className="ranker-card" key={`${item.spid}-${item.spPosition}`}><div><small>{item.position} · 최근 {item.status.matchCount}경기</small><h3>{item.playerName}</h3></div><div className="ranker-numbers"><span><small>경기당 골</small><b>{item.status.goal.toFixed(2)}</b></span><span><small>경기당 도움</small><b>{item.status.assist.toFixed(2)}</b></span><span><small>유효 슈팅</small><b>{item.status.effectiveShoot.toFixed(2)}</b></span><span><small>패스 성공</small><b>{item.status.passSuccess.toFixed(2)}</b></span></div><time>기준 {formatNexonDate(item.createDate)}</time></article>)}</div>}</div>;
-}
-
 export default function App() {
   const [apiKey,setApiKey]=useState(""); const [nickname,setNickname]=useState(""); const [matches,setMatches]=useState<MatchSummary[]>([]);
   const [profile,setProfile]=useState<UserProfile|null>(null); const [selectedId,setSelectedId]=useState<string|null>(null);
   const [loading,setLoading]=useState(false); const [error,setError]=useState(""); const [hasMore,setHasMore]=useState(false); const requestInFlight=useRef(false);
+  const [warnings,setWarnings]=useState<string[]>([]);
   const [matchType,setMatchType]=useState(50); const [matchTypes,setMatchTypes]=useState([{id:50,name:"공식경기"},{id:52,name:"감독모드"},{id:60,name:"공식 친선"}]);
-  const [view,setView]=useState<"matches"|"trades"|"ranker">("matches"); const [trades,setTrades]=useState<TradeRecord[]>([]); const [rankers,setRankers]=useState<RankerRecord[]>([]); const [featureLoading,setFeatureLoading]=useState(false);
+  const [view,setView]=useState<"matches"|"trades"|"ranker">("matches"); const [trades,setTrades]=useState<TradeRecord[]>([]); const [tradeOwner,setTradeOwner]=useState(""); const [rankers,setRankers]=useState<RankerRecord[]>([]); const [featureLoading,setFeatureLoading]=useState(false);
+  const tradeRequestId=useRef(0);
   useEffect(()=>{window.fcOnline.loadSettings().then(settings=>setNickname(settings.nickname));},[]);
   const record=useMemo(()=>matches.reduce((sum,match)=>{sum[match.result==="승"?"wins":match.result==="패"?"losses":"draws"]+=1;return sum;},{wins:0,draws:0,losses:0}),[matches]);
   const representative=useMemo(()=>matches.flatMap(match=>match.players).filter(player=>player.rating>0).sort((a,b)=>b.rating-a.rating)[0]??null,[matches]);
-  async function loadMatches(offset:number){if(requestInFlight.current)return;if(!apiKey.trim()||!nickname.trim()){setError("API 키와 구단주명을 모두 입력해 주세요.");return;}requestInFlight.current=true;setLoading(true);setError("");try{const data=await window.fcOnline.fetchDashboard({apiKey,nickname,offset,matchType});if(data.profile)setProfile(data.profile);if(data.matchTypes.length)setMatchTypes(data.matchTypes);setMatches(current=>offset===0?data.matches:[...current,...data.matches]);setHasMore(data.matches.length===3);setView("matches");await window.fcOnline.saveSettings(nickname);}catch(reason){setError(reason instanceof Error?reason.message:"전적을 불러오지 못했습니다.");}finally{requestInFlight.current=false;setLoading(false);}}
-  async function openTrades(){setView("trades");if(trades.length||!apiKey||!nickname)return;setFeatureLoading(true);setError("");try{setTrades(await window.fcOnline.fetchTrades({apiKey,nickname}));}catch(reason){setError(reason instanceof Error?reason.message:"거래 기록을 불러오지 못했습니다.");}finally{setFeatureLoading(false);}}
+  async function loadMatches(offset:number){if(requestInFlight.current)return;if(!apiKey.trim()||!nickname.trim()){setError("API 키와 구단주명을 모두 입력해 주세요.");return;}requestInFlight.current=true;setLoading(true);setError("");if(offset===0)setWarnings([]);try{const data=await window.fcOnline.fetchDashboard({apiKey,nickname,offset,matchType});if(data.profile)setProfile(data.profile);if(data.matchTypes.length)setMatchTypes(data.matchTypes);setMatches(current=>offset===0?data.matches:[...current,...data.matches]);setWarnings(current=>[...current,...data.failures.map(item=>`${item.matchId.slice(0,8)}…: ${item.message}`)]);setHasMore(data.matches.length+data.failures.length===3);setView("matches");await window.fcOnline.saveSettings(nickname);}catch(reason){setError(reason instanceof Error?reason.message:"전적을 불러오지 못했습니다.");}finally{requestInFlight.current=false;setLoading(false);}}
+  async function openTrades(){const requestId=++tradeRequestId.current;setView("trades");setTrades([]);setTradeOwner("API 키 계정");if(!apiKey.trim()){setError("API 키를 입력해 주세요.");return;}setFeatureLoading(true);setError("");try{const result=await window.fcOnline.fetchTrades({apiKey});const nextTrades=Array.isArray(result)?result:result?.trades;if(!Array.isArray(nextTrades))throw new Error("거래 API 응답 형식을 확인할 수 없습니다.");if(requestId===tradeRequestId.current)setTrades(nextTrades);}catch(reason){if(requestId===tradeRequestId.current){setTrades([]);setError(reason instanceof Error?reason.message:"거래 기록을 불러오지 못했습니다.");}}finally{if(requestId===tradeRequestId.current)setFeatureLoading(false);}}
   async function openRankers(){setView("ranker");if(rankers.length||!apiKey)return;const candidates=matches.flatMap(match=>match.players).filter((player,index,array)=>player.rating>0&&player.positionCode<28&&array.findIndex(item=>item.spId===player.spId&&item.positionCode===player.positionCode)===index).slice(0,5);if(!candidates.length){setError("먼저 경기 전적을 불러와 주세요.");return;}setFeatureLoading(true);setError("");try{setRankers(await window.fcOnline.fetchRankerStats({apiKey,players:candidates.map(player=>({id:player.spId,po:player.positionCode}))}));}catch(reason){setError(reason instanceof Error?reason.message:"랭커 통계를 불러오지 못했습니다.");}finally{setFeatureLoading(false);}}
   function submit(event:FormEvent){event.preventDefault();void loadMatches(0);}
   const selectedMatch=matches.find(match=>match.id===selectedId);
@@ -136,7 +106,9 @@ export default function App() {
       <section className="dashboard">{profile&&<div className="profile-strip"><div className="profile-representative">{representative?<PlayerPhoto player={representative}/>:<div className="profile-avatar">{profile.nickname.slice(0,1)}</div>}</div><div className="profile-name"><small>CLUB OWNER</small><h2>{profile.nickname}</h2><span>{representative?`대표 선수 · ${representative.name} (${representative.rating.toFixed(1)})`:`OUID ${profile.ouid.slice(0,8)}…`}</span></div><div className="profile-stat"><small>LEVEL</small><b>{profile.level.toLocaleString()}</b></div><div className="profile-stat"><small>BEST DIVISION</small><b>{profile.divisionName}</b><span>{profile.divisionDate?formatNexonDate(profile.divisionDate,true):"달성 기록 없음"}</span></div></div>}
       <nav className="feature-nav"><button className={view==="matches"?"active":""} onClick={()=>setView("matches")}>경기</button><button className={view==="trades"?"active":""} onClick={()=>void openTrades()}>거래</button><button className={view==="ranker"?"active":""} onClick={()=>void openRankers()}>랭커 비교</button></nav>
       {error&&<p className="dashboard-error">{error}</p>}
+      {warnings.length>0&&<details className="dashboard-warning"><summary>일부 경기 {warnings.length}건을 불러오지 못했습니다</summary>{warnings.map((warning,index)=><p key={index}>{warning}</p>)}</details>}
       {view==="matches"&&<><div className="section-heading"><div><p className="eyebrow">RECENT FORM</p><h2>{matches.length?`${nickname}님의 ${matchTypes.find(type=>type.id===matchType)?.name??"경기"}`:"최근 전적"}</h2></div>{matches.length>0&&<div className="record"><b>{record.wins}W</b><span>{record.draws}D</span><span>{record.losses}L</span></div>}</div>{matches.length===0?<div className="empty"><span>↗</span><h3>경기 데이터가 여기에 표시됩니다</h3><p>API 키와 구단주명을 입력해 전적을 확인하세요.</p></div>:<div className="match-list">{matches.map((match,index)=><button className="match-row" onClick={()=>setSelectedId(match.id)} key={match.id}><span className="match-number">{String(index+1).padStart(2,"0")}</span><span className={`result result-${resultLabel[match.result]?.toLowerCase()??"draw"}`}>{resultLabel[match.result]??match.result}</span><div className="score"><strong>{match.myScore}</strong><span>:</span><strong>{match.opponentScore}</strong></div><div className="opponent"><small>{match.divisionName} · {formatNexonDate(match.matchDate,true)}</small><b>VS {match.opponentNickname}</b></div><span className="expand-icon">→</span></button>)}{hasMore&&<button className="more" disabled={loading} onClick={()=>void loadMatches(matches.length)}>{loading?"불러오는 중…":"3경기 더 보기 ↓"}</button>}</div>}</>}
-      {view==="trades"&&<TradeView trades={trades} loading={featureLoading}/>} {view==="ranker"&&<RankerView rankers={rankers} loading={featureLoading}/>}</section></>}
+      {view==="trades"&&<TradeView trades={trades} loading={featureLoading} owner={tradeOwner}/>} {view==="ranker"&&<RankerView rankers={rankers} loading={featureLoading}/>}</section></>}
+    <footer className="app-footer"><span>FC ONLINE LAB</span><p>Data based on NEXON Open API</p></footer>
   </main>;
 }

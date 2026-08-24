@@ -27,8 +27,8 @@ type UserProfile = {
 
 interface Window {
   fcOnline: {
-    fetchDashboard(input: { apiKey: string; nickname: string; offset: number; matchType: number }): Promise<{ profile: UserProfile | null; matches: MatchSummary[]; matchTypes: Array<{ id: number; name: string }> }>;
-    fetchTrades(input: { apiKey: string; nickname: string }): Promise<TradeRecord[]>;
+    fetchDashboard(input: { apiKey: string; nickname: string; offset: number; matchType: number }): Promise<{ profile: UserProfile | null; matches: MatchSummary[]; failures: Array<{ matchId: string; message: string }>; matchTypes: Array<{ id: number; name: string }> }>;
+    fetchTrades(input: { apiKey: string }): Promise<{ trades: TradeRecord[] } | TradeRecord[]>;
     fetchRankerStats(input: { apiKey: string; players: Array<{ id: number; po: number }> }): Promise<RankerRecord[]>;
     loadSettings(): Promise<{ nickname: string }>;
     saveSettings(nickname: string): Promise<void>;

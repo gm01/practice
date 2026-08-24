@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { gameMinute } from "../shared/nexon";
 
 const API_BASE_URL = "https://open.api.nexon.com/fconline/v1";
 const NEXON_LOGIN_URL =
@@ -86,7 +87,6 @@ async function nexonRequest<T>(path: string, apiKey: string, params: Record<stri
 }
 
 let metadataPromise: Promise<MetaData> | undefined;
-const identityCache = new Map<string, string>();
 
 function fetchMetadata(): Promise<MetaData> {
   if (!metadataPromise) {
@@ -110,14 +110,6 @@ function fetchMetadata(): Promise<MetaData> {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" ? value : null;
-}
-
-function gameMinute(rawTime: number): number {
-  const periodSize = 2 ** 24;
-  const period = Math.min(Math.floor(rawTime / periodSize), 4);
-  const periodOffsets = [0, 45 * 60, 90 * 60, 105 * 60, 120 * 60];
-  const seconds = rawTime - period * periodSize + periodOffsets[period];
-  return Math.floor(seconds / 60) + 1;
 }
 
 function mapStats(info: Record<string, unknown>): MatchStats {
@@ -187,14 +179,9 @@ function mapShots(info: Record<string, unknown>, metadata: MetaData): ShotSummar
 }
 
 async function resolveOuid(apiKey: string, nickname: string): Promise<string> {
-  let ouid = identityCache.get(nickname);
-  if (!ouid) {
-    const identity = await nexonRequest<{ ouid?: string }>("/id", apiKey, { nickname });
-    if (!identity.ouid) throw new Error("구단주 정보를 찾지 못했습니다.");
-    ouid = identity.ouid;
-    identityCache.set(nickname, ouid);
-  }
-  return ouid;
+  const identity = await nexonRequest<{ ouid?: string }>("/id", apiKey, { nickname: nickname.trim() });
+  if (!identity.ouid) throw new Error("구단주 정보를 찾지 못했습니다.");
+  return identity.ouid;
 }
 
 async function fetchDashboard(apiKey: string, nickname: string, offset: number, matchType: number) {
@@ -208,7 +195,9 @@ async function fetchDashboard(apiKey: string, nickname: string, offset: number, 
   ]);
 
   const matches: MatchSummary[] = [];
+  const failures: Array<{ matchId: string; message: string }> = [];
   for (const matchId of matchIds) {
+    try {
       const detail = await nexonRequest<{ matchDate?: string; matchInfo?: Array<Record<string, unknown>> }>(
         "/match-detail",
         apiKey,
@@ -256,6 +245,9 @@ async function fetchDashboard(apiKey: string, nickname: string, offset: number, 
           ...opponentShots.filter((shot) => shot.isGoal).map(({ minute, playerName, assistName }) => ({ minute, playerName, assistName, side: "opponent" as const })),
         ].sort((a, b) => a.minute - b.minute),
       });
+    } catch (error) {
+      failures.push({ matchId, message: error instanceof Error ? error.message : "경기 상세 조회 실패" });
+    }
       await new Promise((resolve) => setTimeout(resolve, 180));
   }
 
@@ -267,21 +259,22 @@ async function fetchDashboard(apiKey: string, nickname: string, offset: number, 
       divisionDate: officialDivision?.achievementDate ?? null,
     } : null,
     matches,
+    failures,
     matchTypes: metadata.matchTypes,
   };
 }
 
-async function fetchTrades(apiKey: string, nickname: string) {
-  const ouid = await resolveOuid(apiKey, nickname);
+async function fetchTrades(apiKey: string) {
   const metadata = await fetchMetadata();
   const enrich = (type: "buy" | "sell") => async (item: { tradeDate: string; saleSn: string; spid: number; grade: number; value: number }) => {
     const season = metadata.seasons.get(Math.floor(item.spid / 1_000_000));
     return { ...item, type, playerName: metadata.players.get(item.spid) ?? `선수 ${item.spid}`, seasonName: season?.name ?? "시즌 정보 없음", seasonImageUrl: season?.imageUrl ?? "" };
   };
-  const buys = await nexonRequest<Array<{ tradeDate: string; saleSn: string; spid: number; grade: number; value: number }>>("/user/trade", apiKey, { ouid, tradetype: "buy", offset: 0, limit: 20 });
+  const buys = await nexonRequest<Array<{ tradeDate: string; saleSn: string; spid: number; grade: number; value: number }>>("/user/trade", apiKey, { tradetype: "buy", offset: 0, limit: 20 });
   await new Promise((resolve) => setTimeout(resolve, 250));
-  const sells = await nexonRequest<Array<{ tradeDate: string; saleSn: string; spid: number; grade: number; value: number }>>("/user/trade", apiKey, { ouid, tradetype: "sell", offset: 0, limit: 20 });
-  return [...await Promise.all(buys.map(enrich("buy"))), ...await Promise.all(sells.map(enrich("sell")))].sort((a, b) => b.tradeDate.localeCompare(a.tradeDate));
+  const sells = await nexonRequest<Array<{ tradeDate: string; saleSn: string; spid: number; grade: number; value: number }>>("/user/trade", apiKey, { tradetype: "sell", offset: 0, limit: 20 });
+  const trades = [...await Promise.all(buys.map(enrich("buy"))), ...await Promise.all(sells.map(enrich("sell")))].sort((a, b) => b.tradeDate.localeCompare(a.tradeDate));
+  return { trades };
 }
 
 async function fetchRankerStats(apiKey: string, players: Array<{ id: number; po: number }>) {
@@ -306,16 +299,36 @@ function createWindow(): void {
     },
   });
 
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, url) => {
+    const allowed = process.env.ELECTRON_RENDERER_URL ?? `file://${join(__dirname, "../renderer/index.html")}`;
+    if (!url.startsWith(allowed)) event.preventDefault();
+  });
+
   if (process.env.ELECTRON_RENDERER_URL) window.loadURL(process.env.ELECTRON_RENDERER_URL);
   else window.loadFile(join(__dirname, "../renderer/index.html"));
 }
 
 app.whenReady().then(() => {
+  const requireText = (value: unknown, label: string, maxLength: number): string => {
+    if (typeof value !== "string" || !value.trim() || value.length > maxLength) throw new Error(`${label} 입력값이 올바르지 않습니다.`);
+    return value.trim();
+  };
+  const allowedMatchTypes = new Set([30, 40, 50, 52, 60, 204, 214, 224, 234]);
   ipcMain.handle("dashboard:fetch", (_event, input: { apiKey: string; nickname: string; offset: number; matchType: number }) =>
-    fetchDashboard(input.apiKey.trim(), input.nickname.trim(), input.offset, input.matchType),
+    fetchDashboard(
+      requireText(input?.apiKey, "API 키", 512),
+      requireText(input?.nickname, "구단주명", 32),
+      Number.isInteger(input?.offset) && input.offset >= 0 && input.offset <= 10_000 ? input.offset : 0,
+      allowedMatchTypes.has(input?.matchType) ? input.matchType : 50,
+    ),
   );
-  ipcMain.handle("trades:fetch", (_event, input: { apiKey: string; nickname: string }) => fetchTrades(input.apiKey.trim(), input.nickname.trim()));
-  ipcMain.handle("ranker:fetch", (_event, input: { apiKey: string; players: Array<{ id: number; po: number }> }) => fetchRankerStats(input.apiKey.trim(), input.players));
+  ipcMain.handle("trades:fetch", (_event, input: { apiKey: string }) => fetchTrades(requireText(input?.apiKey, "API 키", 512)));
+  ipcMain.handle("ranker:fetch", (_event, input: { apiKey: string; players: Array<{ id: number; po: number }> }) => {
+    const players = Array.isArray(input?.players) ? input.players.filter((player) => Number.isInteger(player?.id) && Number.isInteger(player?.po)).slice(0, 5) : [];
+    if (!players.length) throw new Error("랭커 비교 선수 정보가 올바르지 않습니다.");
+    return fetchRankerStats(requireText(input?.apiKey, "API 키", 512), players);
+  });
   ipcMain.handle("settings:load", async () => {
     try {
       return JSON.parse(await readFile(join(app.getPath("userData"), "settings.json"), "utf8"));
