@@ -1,28 +1,70 @@
 {
-  "name": "fc-online-dashboard",
+  "name": "fc-online-lab",
+  "productName": "FC Online Lab",
   "version": "0.1.0",
   "private": true,
-  "description": "FC Online match dashboard built with Electron, React, and TypeScript",
+  "description": "FC Online 경기 기록과 플레이 데이터를 분석하는 데스크톱 앱",
+  "author": "gm01",
+  "license": "UNLICENSED",
   "main": "out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:linux": "npm run build && electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.gm01.fconlinelab",
+    "productName": "FC Online Lab",
+    "asar": true,
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.sports",
+      "target": ["dmg", "zip"],
+      "icon": "build/icon.png"
+    },
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "category": "Sports",
+      "target": ["AppImage", "deb"],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
     "electron-vite": "^5.0.0",
-    "react": "latest",
-    "react-dom": "latest"
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "electron": "latest",
-    "typescript": "latest",
+    "@types/node": "26.2.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "electron": "43.4.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "7.0.2",
     "vite": "^7.3.6",
     "vitest": "^3.2.4"
   }

@@ -7,13 +7,15 @@ type MatchStats = {
 
 type PlayerSummary = {
   spId: number; name: string; position: string; positionCode: number; grade: number;
-  rating: number; goals: number; assists: number; imageUrls: string[]; seasonName: string; seasonImageUrl: string;
+  rating: number; goals: number; assists: number; shots: number; effectiveShots: number;
+  passTry: number; passSuccess: number; imageUrls: string[]; seasonName: string; seasonImageUrl: string;
 };
 
-type ShotSummary = { x: number; y: number; isGoal: boolean; playerName: string; assistName: string | null; minute: number };
+type ShotSummary = { x: number; y: number; isGoal: boolean; playerName: string; assistName: string | null; minute: number; type: number; inPenalty: boolean };
 
 type MatchSummary = {
   id: string; matchDate: string; result: string; myScore: number; opponentScore: number;
+  ownGoalsFor: number; ownGoalsAgainst: number;
   opponentNickname: string; divisionName: string; opponentDivisionName: string;
   controller: string; endType: number; stats: MatchStats; opponentStats: MatchStats;
   players: PlayerSummary[]; opponentPlayers: PlayerSummary[]; topPlayers: PlayerSummary[];

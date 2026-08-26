@@ -13,6 +13,8 @@ type MatchSummary = {
   result: string;
   myScore: number;
   opponentScore: number;
+  ownGoalsFor: number;
+  ownGoalsAgainst: number;
   opponentNickname: string;
   divisionName: string;
   opponentDivisionName: string;
@@ -51,10 +53,14 @@ type PlayerSummary = {
   rating: number;
   goals: number;
   assists: number;
+  shots: number;
+  effectiveShots: number;
+  passTry: number;
+  passSuccess: number;
   imageUrls: string[];
 };
 
-type ShotSummary = { x: number; y: number; isGoal: boolean; playerName: string; assistName: string | null; minute: number };
+type ShotSummary = { x: number; y: number; isGoal: boolean; playerName: string; assistName: string | null; minute: number; type: number; inPenalty: boolean };
 
 type Profile = { ouid: string; nickname: string; level: number };
 type DivisionRecord = { matchType: number; division: number; achievementDate: string };
@@ -68,17 +74,39 @@ type MetaData = {
 
 type ApiErrorBody = { error?: { name?: string; message?: string } };
 
+function networkErrorMessage(error: unknown): string {
+  const cause = error instanceof Error ? (error as Error & { cause?: { code?: string } }).cause : undefined;
+  if (cause?.code === "ENOTFOUND") return "넥슨 API 서버 주소를 찾지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.";
+  if (error instanceof Error && error.name === "TimeoutError") return "넥슨 API 응답 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.";
+  return "넥슨 API 서버에 연결하지 못했습니다. 네트워크 연결을 확인해 주세요.";
+}
+
+async function fetchWithRetry(url: URL | string, init: RequestInit = {}): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(10_000) });
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    }
+  }
+  throw new Error(networkErrorMessage(lastError), { cause: lastError });
+}
+
 async function nexonRequest<T>(path: string, apiKey: string, params: Record<string, string | number>): Promise<T> {
   const url = new URL(`${API_BASE_URL}${path}`);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       headers: { "x-nxopen-api-key": apiKey },
-      signal: AbortSignal.timeout(10_000),
     });
     if (response.ok) return response.json() as Promise<T>;
     const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
-    const message = body.error?.message ?? `Nexon API 요청 실패 (${response.status})`;
+    const rawMessage = body.error?.message ?? `Nexon API 요청 실패 (${response.status})`;
+    const message = /api\s*key|apikey/i.test(rawMessage) && /not valid|invalid/i.test(rawMessage)
+      ? "Nexon Open API 키가 유효하지 않습니다. 새로 발급한 API 키를 입력해 주세요."
+      : rawMessage;
     const retryable = response.status === 429 || response.status >= 500 || message.includes("try again");
     if (!retryable || attempt === 2) throw new Error(message);
     await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
@@ -92,18 +120,21 @@ function fetchMetadata(): Promise<MetaData> {
   if (!metadataPromise) {
     const base = "https://open.api.nexon.com/static/fconline/meta";
     metadataPromise = Promise.all([
-      fetch(`${base}/division.json`).then((response) => response.json()) as Promise<Array<{ divisionId: number; divisionName: string }>>,
-      fetch(`${base}/spid.json`).then((response) => response.json()) as Promise<Array<{ id: number; name: string }>>,
-      fetch(`${base}/spposition.json`).then((response) => response.json()) as Promise<Array<{ spposition: number; desc: string }>>,
-      fetch(`${base}/matchtype.json`).then((response) => response.json()) as Promise<Array<{ matchtype: number; desc: string }>>,
-      fetch(`${base}/seasonid.json`).then((response) => response.json()) as Promise<Array<{ seasonId: number; className: string; seasonImg: string }>>,
+      fetchWithRetry(`${base}/division.json`).then((response) => response.json()) as Promise<Array<{ divisionId: number; divisionName: string }>>,
+      fetchWithRetry(`${base}/spid.json`).then((response) => response.json()) as Promise<Array<{ id: number; name: string }>>,
+      fetchWithRetry(`${base}/spposition.json`).then((response) => response.json()) as Promise<Array<{ spposition: number; desc: string }>>,
+      fetchWithRetry(`${base}/matchtype.json`).then((response) => response.json()) as Promise<Array<{ matchtype: number; desc: string }>>,
+      fetchWithRetry(`${base}/seasonid.json`).then((response) => response.json()) as Promise<Array<{ seasonId: number; className: string; seasonImg: string }>>,
     ]).then(([divisions, players, positions, matchTypes, seasons]) => ({
       divisions: new Map(divisions.map((item) => [item.divisionId, item.divisionName])),
       players: new Map(players.map((item) => [item.id, item.name])),
       positions: new Map(positions.map((item) => [item.spposition, item.desc])),
       matchTypes: matchTypes.map((item) => ({ id: item.matchtype, name: item.desc })),
       seasons: new Map(seasons.map((item) => [item.seasonId, { name: item.className, imageUrl: item.seasonImg }])),
-    }));
+    })).catch((error) => {
+      metadataPromise = undefined;
+      throw error;
+    });
   }
   return metadataPromise;
 }
@@ -139,7 +170,7 @@ function mapPlayers(info: Record<string, unknown>, metadata: MetaData): PlayerSu
   return rawPlayers.map((player) => {
     const status = player.status as Record<string, unknown> | undefined;
     const spId = Number(player.spId);
-    const pid = String(spId % 1_000_000).padStart(6, "0");
+    const pid = String(spId % 1_000_000);
     const season = metadata.seasons.get(Math.floor(spId / 1_000_000));
     return {
       spId,
@@ -150,6 +181,10 @@ function mapPlayers(info: Record<string, unknown>, metadata: MetaData): PlayerSu
       rating: Number(status?.spRating ?? 0),
       goals: Number(status?.goal ?? 0),
       assists: Number(status?.assist ?? 0),
+      shots: Number(status?.shoot ?? 0),
+      effectiveShots: Number(status?.effectiveShoot ?? 0),
+      passTry: Number(status?.passTry ?? 0),
+      passSuccess: Number(status?.passSuccess ?? 0),
       imageUrls: [
         `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${spId}.png`,
         `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${spId}.png`,
@@ -174,6 +209,8 @@ function mapShots(info: Record<string, unknown>, metadata: MetaData): ShotSummar
       playerName: metadata.players.get(spId) ?? "선수 정보 없음",
       assistName: Boolean(shot.assist) && assistSpId ? metadata.players.get(assistSpId) ?? `선수 ${assistSpId}` : null,
       minute: gameMinute(Number(shot.goalTime ?? 0)),
+      type: Number(shot.type ?? 0),
+      inPenalty: Boolean(shot.inPenalty),
     };
   });
 }
@@ -190,7 +227,7 @@ async function fetchDashboard(apiKey: string, nickname: string, offset: number, 
   const [profile, divisions, matchIds, metadata] = await Promise.all([
     offset === 0 ? nexonRequest<Profile>("/user/basic", apiKey, { ouid }) : Promise.resolve(null),
     offset === 0 ? nexonRequest<DivisionRecord[]>("/user/maxdivision", apiKey, { ouid }) : Promise.resolve([]),
-    nexonRequest<string[]>("/user/match", apiKey, { ouid, matchtype: matchType, offset, limit: 3 }),
+    nexonRequest<string[]>("/user/match", apiKey, { ouid, matchtype: matchType, offset, limit: 20 }),
     fetchMetadata(),
   ]);
 
@@ -228,6 +265,10 @@ async function fetchDashboard(apiKey: string, nickname: string, offset: number, 
         result: mineDetail?.matchResult ?? "기록 없음",
         myScore: Number(mineShoot?.goalTotalDisplay ?? mineShoot?.goalTotal ?? 0),
         opponentScore: Number(opponentShoot?.goalTotalDisplay ?? opponentShoot?.goalTotal ?? 0),
+        // ownGoal belongs to the participant who put the ball into their own net.
+        // It therefore contributes to the other participant's score.
+        ownGoalsFor: Number(opponentShoot?.ownGoal ?? 0),
+        ownGoalsAgainst: Number(mineShoot?.ownGoal ?? 0),
         opponentNickname: String(opponent.nickname ?? "상대 구단주"),
         divisionName: metadata.divisions.get(divisionId) ?? "등급 정보 없음",
         opponentDivisionName: metadata.divisions.get(opponentDivisionId) ?? "등급 정보 없음",
@@ -291,6 +332,8 @@ function createWindow(): void {
     minHeight: 640,
     backgroundColor: "#07110d",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    show: false,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -298,6 +341,8 @@ function createWindow(): void {
       sandbox: true,
     },
   });
+
+  window.once("ready-to-show", () => window.show());
 
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
@@ -308,6 +353,20 @@ function createWindow(): void {
   if (process.env.ELECTRON_RENDERER_URL) window.loadURL(process.env.ELECTRON_RENDERER_URL);
   else window.loadFile(join(__dirname, "../renderer/index.html"));
 }
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
+else app.on("second-instance", () => {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (window?.isMinimized()) window.restore();
+  window?.focus();
+});
+
+app.setAboutPanelOptions({
+  applicationName: "FC Online Lab",
+  applicationVersion: app.getVersion(),
+  copyright: "Data based on NEXON Open API",
+});
 
 app.whenReady().then(() => {
   const requireText = (value: unknown, label: string, maxLength: number): string => {
