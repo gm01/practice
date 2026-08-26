@@ -21,6 +21,17 @@ npm install
 npm run dev
 ```
 
+### Android / iOS 공통 앱
+
+```bash
+cd apps/mobile
+npm install
+npm run android  # Android
+npm run ios      # iOS (macOS 필요)
+```
+
+모바일 앱은 Expo와 React Native를 사용하며 Android와 iOS가 하나의 화면·데이터 코드를 공유합니다.
+
 ## 품질 검사
 
 ```bash
