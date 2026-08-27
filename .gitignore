@@ -4,6 +4,9 @@ dist/
 release/
 apps/mobile/.expo/
 apps/mobile/node_modules/
+apps/api/node_modules/
+apps/api/.wrangler/
+apps/api/.dev.vars
 *.log
 .DS_Store
 config.json

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("fcOnline", {
-  fetchDashboard: (input: { apiKey: string; nickname: string; offset: number; matchType: number }) =>
+  fetchDashboard: (input: { apiKey?: string; nickname: string; offset: number; matchType: number }) =>
     ipcRenderer.invoke("dashboard:fetch", input),
   fetchTrades: (input: { apiKey: string }) => ipcRenderer.invoke("trades:fetch", input),
   fetchRankerStats: (input: { apiKey: string; players: Array<{ id: number; po: number }> }) => ipcRenderer.invoke("ranker:fetch", input),

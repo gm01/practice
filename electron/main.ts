@@ -6,6 +6,7 @@ import { gameMinute } from "../shared/nexon";
 const API_BASE_URL = "https://open.api.nexon.com/fconline/v1";
 const NEXON_LOGIN_URL =
   "https://nxlogin.nexon.com/common/login.aspx?redirect=https%3A%2F%2Ffconline.nexon.com%2Fmain%2Findex";
+const SERVICE_API = "https://fc-online-lab-api.bebebe97.workers.dev";
 
 type MatchSummary = {
   id: string;
@@ -368,15 +369,37 @@ app.setAboutPanelOptions({
   copyright: "Data based on NEXON Open API",
 });
 
+async function fetchServiceDashboard(nickname: string, offset: number, matchType: number) {
+  const url = new URL("/v1/dashboard", SERVICE_API);
+  url.searchParams.set("nickname", nickname);
+  url.searchParams.set("offset", String(offset));
+  url.searchParams.set("limit", "20");
+  url.searchParams.set("matchtype", String(matchType));
+  const response = await fetch(url, { signal: AbortSignal.timeout(35_000) });
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok) {
+    const error = body.error as { message?: string } | undefined;
+    throw new Error(error?.message ?? `전적 조회에 실패했습니다. (${response.status})`);
+  }
+  return {
+    profile: body.profile ?? null,
+    matches: body.matches ?? [],
+    failures: ((body.warnings as string[] | undefined) ?? []).map((message, index) => ({ matchId: `warning-${index}`, message })),
+    matchTypes: [
+      { id: 50, name: "공식경기" }, { id: 52, name: "감독모드" }, { id: 60, name: "공식 친선" },
+      { id: 40, name: "커스텀 매치" }, { id: 30, name: "리그 친선" },
+    ],
+  };
+}
+
 app.whenReady().then(() => {
   const requireText = (value: unknown, label: string, maxLength: number): string => {
     if (typeof value !== "string" || !value.trim() || value.length > maxLength) throw new Error(`${label} 입력값이 올바르지 않습니다.`);
     return value.trim();
   };
   const allowedMatchTypes = new Set([30, 40, 50, 52, 60, 204, 214, 224, 234]);
-  ipcMain.handle("dashboard:fetch", (_event, input: { apiKey: string; nickname: string; offset: number; matchType: number }) =>
-    fetchDashboard(
-      requireText(input?.apiKey, "API 키", 512),
+  ipcMain.handle("dashboard:fetch", (_event, input: { apiKey?: string; nickname: string; offset: number; matchType: number }) =>
+    fetchServiceDashboard(
       requireText(input?.nickname, "구단주명", 32),
       Number.isInteger(input?.offset) && input.offset >= 0 && input.offset <= 10_000 ? input.offset : 0,
       allowedMatchTypes.has(input?.matchType) ? input.matchType : 50,

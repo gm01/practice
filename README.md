@@ -32,6 +32,19 @@ npm run ios      # iOS (macOS 필요)
 
 모바일 앱은 Expo와 React Native를 사용하며 Android와 iOS가 하나의 화면·데이터 코드를 공유합니다.
 
+### API 백엔드
+
+Cloudflare Workers 백엔드는 NEXON Open API 키를 Secret으로 보관하고 클라이언트에 전적 데이터를 전달합니다.
+
+```bash
+cd apps/api
+npm install
+cp .dev.vars.example .dev.vars # 개발 키 입력, Git 제외
+npm run dev
+```
+
+운영 키는 `npx wrangler secret put NEXON_API_KEY`로 등록하며 코드나 Git에 저장하지 않습니다.
+
 ## 품질 검사
 
 ```bash

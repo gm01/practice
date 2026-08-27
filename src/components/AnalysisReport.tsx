@@ -32,8 +32,9 @@ function shotQuality(shot: ShotSummary): number {
 export default function AnalysisReport({ matches, rankers, onSelectPlayer }: { matches: MatchSummary[]; rankers: RankerRecord[]; onSelectPlayer: (spId: number) => void }) {
   const [tab, setTab] = useState<ReportTab>("overview");
   const [shotPlayer, setShotPlayer] = useState("전체");
+  const [range, setRange] = useState<5 | 10 | 20>(20);
   const analysis = useMemo(() => {
-    const sample = matches.slice(0, 20);
+    const sample = matches.slice(0, range);
     const wins = sample.filter(match => match.result === "승").length;
     const draws = sample.filter(match => match.result === "무").length;
     const losses = sample.filter(match => match.result === "패").length;
@@ -80,13 +81,13 @@ export default function AnalysisReport({ matches, rankers, onSelectPlayer }: { m
         ? "먼저 실점한 경기의 역전 승률이 낮습니다. 경기 초반 안정적인 운영이 중요합니다."
         : "특정 시간대에 크게 치우치지 않은 비교적 안정적인 득실점 흐름입니다.";
     return { sample,wins,draws,losses,goalsFor,goalsAgainst,shots,effectiveShots,possessions,firstScored,firstConceded,timeline,firstHalfFor,secondHalfFor,firstHalfAgainst,secondHalfAgainst,streak,players,allShots,allOpponentShots,shotTypes,formations:[...formations.entries()].sort((a,b)=>b[1].games-a[1].games),styles,insight };
-  }, [matches]);
+  }, [matches, range]);
 
   const filteredShots = shotPlayer === "전체" ? analysis.allShots : analysis.allShots.filter(shot => shot.playerName === shotPlayer);
   const maxTimeline = Math.max(1, ...analysis.timeline.flatMap(row => [row.mine, row.opponent]));
   const tabs: Array<[ReportTab,string]> = [["overview","종합"],["players","선수"],["shots","슈팅"],["tactics","전술"]];
   return <section className="analysis-report">
-    <div className="analysis-heading"><div><p className="eyebrow">PERFORMANCE REPORT</p><h2>최근 {analysis.sample.length}경기 분석</h2></div><nav>{tabs.map(([key,label])=><button className={tab===key?"active":""} onClick={()=>setTab(key)} key={key}>{label}</button>)}</nav></div>
+    <div className="analysis-heading"><div><p className="eyebrow">PERFORMANCE REPORT</p><h2>최근 {analysis.sample.length}경기 분석</h2><div className="range-select">{([5,10,20] as const).map(value=><button className={range===value?'active':''} onClick={()=>setRange(value)} key={value}>{value}경기</button>)}</div></div><nav>{tabs.map(([key,label])=><button className={tab===key?"active":""} onClick={()=>setTab(key)} key={key}>{label}</button>)}</nav></div>
 
     {tab === "overview" && <div className="report-panel">
       <div className="report-kpis">
