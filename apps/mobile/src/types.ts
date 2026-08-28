@@ -3,7 +3,7 @@ export type Side = "mine" | "opponent";
 export type Player = {
   spId: number; name: string; position: string; positionCode: number; grade: number;
   rating: number; goals: number; assists: number; shots: number; effectiveShots: number;
-  passTry: number; passSuccess: number; imageUrls: string[]; seasonName: string;
+  passTry: number; passSuccess: number; imageUrls: string[]; seasonName: string; seasonImageUrl: string;
 };
 
 export type Shot = { x: number; y: number; isGoal: boolean; playerName: string; assistName: string | null; minute: number };

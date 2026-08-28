@@ -26,7 +26,7 @@ type MatchSummary = {
 type UserProfile = {
   ouid: string; nickname: string; level: number; divisionName: string; divisionDate: string | null;
 };
-type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; overall: number; primaryPosition: string; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string };
+type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; overall: number; primaryPosition: string; salary: number; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string };
 type PlayerDetail = {
   spId: number; grade: number; name: string; seasonId: number; seasonName: string; overall: number; baseOverall: number; overallDelta: number; primaryPosition: string; salary: number;
   birthDate: string; height: string; weight: string; bodyType: string; playerClass: string; skillMoves: number; leftFoot: number; rightFoot: number;

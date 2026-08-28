@@ -15,6 +15,7 @@ type Metadata = {
   positions: Map<number, string>;
   divisions: Map<number, string>;
   seasons: Map<number, string>;
+  seasonImages: Map<number, string>;
 };
 
 class ApiError extends Error {
@@ -98,12 +99,13 @@ async function loadMetadata(): Promise<Metadata> {
     fetch(`${META}/spid.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ id: number; name: string }>>,
     fetch(`${META}/spposition.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ spposition: number; desc: string }>>,
     fetch(`${META}/division.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ divisionId: number; divisionName: string }>>,
-    fetch(`${META}/seasonid.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ seasonId: number; className: string }>>,
+    fetch(`${META}/seasonid.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ seasonId: number; className: string; seasonImg: string }>>,
   ]).then(([players, positions, divisions, seasons]) => ({
     players: new Map(players.map(item => [Number(item.id), item.name])),
     positions: new Map(positions.map(item => [Number(item.spposition), item.desc])),
     divisions: new Map(divisions.map(item => [Number(item.divisionId), item.divisionName])),
     seasons: new Map(seasons.map(item => [Number(item.seasonId), item.className])),
+    seasonImages: new Map(seasons.map(item => [Number(item.seasonId), item.seasonImg])),
   })).catch(error => {
     metadataCache = null;
     throw error;
@@ -136,7 +138,7 @@ function mapPlayers(info: Json, meta: Metadata) {
       passTry: Number(status?.passTry ?? 0),
       passSuccess: Number(status?.passSuccess ?? 0),
       seasonName: meta.seasons.get(Math.floor(spId / 1_000_000)) ?? "시즌 정보 없음",
-      seasonImageUrl: `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/season/seasonicon/${Math.floor(spId / 1_000_000)}.png`,
+      seasonImageUrl: meta.seasonImages.get(Math.floor(spId / 1_000_000)) ?? "",
       imageUrls: [
         `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${spId}.png`,
         `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${spId}.png`,
@@ -278,7 +280,7 @@ async function searchPlayers(url: URL) {
           `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${spId}.png`,
           `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${pid}.png`,
         ],
-        seasonImageUrl: `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/season/seasonicon/${cardSeasonId}.png`,
+        seasonImageUrl: meta.seasonImages.get(cardSeasonId) ?? "",
       };
     })
     .sort((a, b) => Number(b.name === query) - Number(a.name === query) || Number(b.name.startsWith(query)) - Number(a.name.startsWith(query)) || b.seasonId - a.seasonId)
@@ -332,7 +334,7 @@ async function dataCenterFetch(path: string, init?: RequestInit) {
 }
 
 function emptyPlayerSearchFacts() {
-  return { overall: 0, primaryPosition: "-", height: "", weight: "", bodyType: "", leftFoot: 0, rightFoot: 0, weakFoot: 0, preferredFoot: "-" };
+  return { overall: 0, primaryPosition: "-", salary: 0, height: "", weight: "", bodyType: "", leftFoot: 0, rightFoot: 0, weakFoot: 0, preferredFoot: "-" };
 }
 
 async function playerSearchFacts(spId: number) {
@@ -351,6 +353,7 @@ async function playerSearchFacts(spId: number) {
   return {
     overall: Number(firstMatch(html, /<div class="ovr value">\s*(\d+)/i, "0")),
     primaryPosition: firstMatch(html, /<div class="position">([\s\S]*?)<\/div>/i, "-"),
+    salary: Number(firstMatch(html, /<div class="pay">[\s\S]*?<span>\s*(\d+)/i, "0")),
     height: classText(html, "height"),
     weight: classText(html, "weight"),
     bodyType: classText(html, "physical"),
@@ -474,7 +477,7 @@ async function playerDetail(url: URL) {
   });
   const appliedForm = new URLSearchParams({
     spid: String(spId), n1Strong: String(grade), n1Grow: String(grow), n4TeamColorId: String(affiliationId), n4TeamColorLv: "1",
-    n4TeamColorId_Enhance: String(enhancementId), n4TeamColorLv_Enhance: String(enhancementLevel), n4TeamColorId_Feature: String(featureId), n1Change: "1", strPlayerImg: "",
+    n4TeamColorId_Enhance: String(enhancementId), n4TeamColorLv_Enhance: String(enhancementLevel), n4TeamColorId_Feature: String(featureId), n1Change: affiliationId > 0 ? "1" : "0", strPlayerImg: "",
   });
   const post = (body: string) => ({ method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: `${DATA_CENTER}${detailPath}` }, body }) satisfies RequestInit;
   const hasModifiers = grow > 0 || affiliationId > 0 || enhancementId > 0 || featureId > 0;

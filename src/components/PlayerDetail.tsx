@@ -7,9 +7,10 @@ const average = (values: number[]) => values.length ? values.reduce((sum, value)
 const percent = (value: number, total: number) => total ? Math.round(value / total * 100) : 0;
 const inverseResult: Record<string, string> = { 승: "패", 패: "승", 무: "무" };
 
-export default function PlayerDetail({ matches, spId, side, onOpenMatch }: {
+export default function PlayerDetail({ matches, spId, side, onOpenMatch, onSearchPlayer }: {
   matches: MatchSummary[]; spId: number; side: "mine" | "opponent";
   onOpenMatch: (matchId: string) => void;
+  onSearchPlayer: (name: string) => void;
 }) {
   const report = useMemo(() => {
     const appearances = matches.flatMap(match => {
@@ -66,7 +67,7 @@ export default function PlayerDetail({ matches, spId, side, onOpenMatch }: {
   if (!report.player) return <section className="player-detail-page"><div className="empty"><h3>선수 출전 기록을 찾지 못했습니다.</h3></div></section>;
   const best = Math.max(...report.ratings), worst = Math.min(...report.ratings), avgRating = average(report.ratings);
   return <section className="player-detail-page">
-    <header className="player-detail-hero"><div className="player-detail-photo"><PlayerPhoto player={report.player}/></div><div><p className="eyebrow">PLAYER REPORT</p><h1>{report.player.name}</h1><span>{report.player.seasonName} · {report.mainPosition} · +{report.player.grade}강</span></div><strong>{avgRating.toFixed(2)}<small>평균 평점</small></strong></header>
+    <header className="player-detail-hero"><button className="player-detail-photo" onClick={()=>onSearchPlayer(report.player!.name)} aria-label={`${report.player.name} 시즌 카드 검색`}><PlayerPhoto player={report.player} showSeason/></button><div><p className="eyebrow">PLAYER REPORT</p><h1>{report.player.name}</h1><span>{report.player.seasonName} · {report.mainPosition} · +{report.player.grade}강</span></div><strong>{avgRating.toFixed(2)}<small>평균 평점</small></strong></header>
     <div className="player-detail-kpis">
       <article><small>출전</small><b>{report.appearances.length}</b><span>최근 불러온 경기 기준</span></article>
       <article><small>골 · 도움</small><b>{report.goals} · {report.assists}</b><span>경기당 {((report.goals + report.assists) / report.appearances.length).toFixed(2)} 공격P</span></article>

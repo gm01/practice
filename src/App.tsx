@@ -530,6 +530,7 @@ export default function App() {
   const [tradeOwner, setTradeOwner] = useState("");
   const [rankers, setRankers] = useState<RankerRecord[]>([]);
   const [featureLoading, setFeatureLoading] = useState(false);
+  const [playerInfoQuery,setPlayerInfoQuery]=useState("");
   const [playerInfoBack,setPlayerInfoBack]=useState<(() => void)|null>(null);
   const changePlayerInfoBack=useCallback((handler:(()=>void)|null)=>setPlayerInfoBack(handler?()=>handler:null),[]);
   const tradeRequestId = useRef(0);
@@ -738,7 +739,7 @@ export default function App() {
         <div className="top-actions">
           <nav className="main-feature-nav" aria-label="주요 기능">
             <button className={view === "matches" ? "active" : ""} onClick={() => { setSelectedPlayer(null); setSelectedId(null); setPlayerInfoBack(null); setView("matches"); }}><b>경기·분석</b><span>구단주 전적과 경기 흐름</span></button>
-            <button className={view === "players" ? "active" : ""} onClick={() => { setSelectedPlayer(null); setSelectedId(null); setView("players"); }}><b>선수 정보</b><span>시즌 카드와 팀컬러 능력치</span></button>
+            <button className={view === "players" ? "active" : ""} onClick={() => { setPlayerInfoQuery(""); setSelectedPlayer(null); setSelectedId(null); setView("players"); }}><b>선수 정보</b><span>시즌 카드와 팀컬러 능력치</span></button>
           </nav>
           <button className="login-link" onClick={() => void window.fcOnline.openLogin()}>넥슨 로그인 ↗</button>
         </div>
@@ -748,6 +749,12 @@ export default function App() {
           matches={matches}
           spId={selectedPlayer.spId}
           side={selectedPlayer.side}
+          onSearchPlayer={(name) => {
+            setPlayerInfoQuery(name);
+            setSelectedPlayer(null);
+            setSelectedId(null);
+            setView("players");
+          }}
           onOpenMatch={(matchId) => {
             setSelectedPlayer(null);
             setSelectedId(matchId);
@@ -760,7 +767,7 @@ export default function App() {
           onSelectPlayer={(spId, side) => setSelectedPlayer({ spId, side })}
         />
       ) : view === "players" ? (
-        <section className="dashboard standalone-player-info"><PlayerDatabase matches={matches} onHeaderBackChange={changePlayerInfoBack} /></section>
+        <section className="dashboard standalone-player-info"><PlayerDatabase matches={matches} initialQuery={playerInfoQuery} onHeaderBackChange={changePlayerInfoBack} /></section>
       ) : (
         <>
           <section className="hero">

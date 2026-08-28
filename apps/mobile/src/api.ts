@@ -2,7 +2,7 @@ import type { Dashboard } from "./types";
 
 const API = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || "https://fc-online-lab-api.bebebe97.workers.dev";
 
-export type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; overall: number; primaryPosition: string; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string };
+export type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; overall: number; primaryPosition: string; salary: number; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string };
 export type PlayerDetail = {
   spId: number; grade: number; name: string; seasonId: number; seasonName: string; overall: number; baseOverall: number; overallDelta: number; primaryPosition: string; salary: number;
   birthDate: string; height: string; weight: string; bodyType: string; playerClass: string; skillMoves: number; leftFoot: number; rightFoot: number;
