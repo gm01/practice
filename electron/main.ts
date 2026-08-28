@@ -6,7 +6,7 @@ import { gameMinute } from "../shared/nexon";
 const API_BASE_URL = "https://open.api.nexon.com/fconline/v1";
 const NEXON_LOGIN_URL =
   "https://nxlogin.nexon.com/common/login.aspx?redirect=https%3A%2F%2Ffconline.nexon.com%2Fmain%2Findex";
-const SERVICE_API = "https://fc-online-lab-api.bebebe97.workers.dev";
+const SERVICE_API = process.env.FC_ONLINE_API_BASE_URL?.trim() || "https://fc-online-lab-api.bebebe97.workers.dev";
 
 type MatchSummary = {
   id: string;
@@ -392,6 +392,29 @@ async function fetchServiceDashboard(nickname: string, offset: number, matchType
   };
 }
 
+async function fetchServicePlayers(query: string) {
+  const url = new URL("/v1/players/search", SERVICE_API);
+  url.searchParams.set("q", query);
+  url.searchParams.set("limit", "50");
+  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+  const body = await response.json().catch(() => ({})) as { players?: unknown[]; error?: { message?: string } };
+  if (!response.ok) throw new Error(body.error?.message ?? "선수 검색에 실패했습니다.");
+  return body.players ?? [];
+}
+
+type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
+
+async function fetchServicePlayerDetail(spId: number, grade: number, options: PlayerDetailOptions = {}) {
+  const url = new URL("/v1/players/detail", SERVICE_API);
+  url.searchParams.set("spid", String(spId));
+  url.searchParams.set("grade", String(grade));
+  for (const [key, value] of Object.entries(options)) if (Number.isInteger(value) && Number(value) >= 0) url.searchParams.set(key, String(value));
+  const response = await fetch(url, { signal: AbortSignal.timeout(25_000) });
+  const body = await response.json().catch(() => ({})) as { error?: { message?: string } };
+  if (!response.ok) throw new Error(body.error?.message ?? "선수 상세 정보를 불러오지 못했습니다.");
+  return body;
+}
+
 app.whenReady().then(() => {
   const requireText = (value: unknown, label: string, maxLength: number): string => {
     if (typeof value !== "string" || !value.trim() || value.length > maxLength) throw new Error(`${label} 입력값이 올바르지 않습니다.`);
@@ -405,6 +428,12 @@ app.whenReady().then(() => {
       allowedMatchTypes.has(input?.matchType) ? input.matchType : 50,
     ),
   );
+  ipcMain.handle("players:search", (_event, query: string) => fetchServicePlayers(requireText(query, "선수명", 40)));
+  ipcMain.handle("players:detail", (_event, input: { spId: number; grade: number; options?: PlayerDetailOptions }) => {
+    if (!Number.isInteger(input?.spId) || input.spId < 1) throw new Error("선수 식별자가 올바르지 않습니다.");
+    const grade = Number.isInteger(input?.grade) && input.grade >= 0 && input.grade <= 13 ? input.grade : 1;
+    return fetchServicePlayerDetail(input.spId, grade, input.options);
+  });
   ipcMain.handle("trades:fetch", (_event, input: { apiKey: string }) => fetchTrades(requireText(input?.apiKey, "API 키", 512)));
   ipcMain.handle("ranker:fetch", (_event, input: { apiKey: string; players: Array<{ id: number; po: number }> }) => {
     const players = Array.isArray(input?.players) ? input.players.filter((player) => Number.isInteger(player?.id) && Number.isInteger(player?.po)).slice(0, 5) : [];

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -17,14 +18,16 @@ import {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as Sharing from "expo-sharing";
 import ViewShot, { type ViewShotRef } from "react-native-view-shot";
-import { fetchDashboard } from "./src/api";
+import { fetchDashboard, fetchPlayerDetail, searchPlayers, type PlayerCard, type PlayerDetail, type PlayerDetailOptions } from "./src/api";
 import { C, s } from "./src/styles";
 import type { Dashboard, Match, Player, Side } from "./src/types";
 import {
   loadSearches,
+  loadPlayerFavorites,
   rememberSearch,
   removeSearch,
   toggleFavorite,
+  togglePlayerFavorite,
   type SearchItem,
 } from "./src/storage";
 
@@ -66,6 +69,24 @@ const date = (v: string) =>
   new Date(v.endsWith("Z") ? v : `${v}Z`).toLocaleDateString("ko-KR", {
     timeZone: "Asia/Seoul",
   });
+const statColor = (value: number) => {
+  if (value >= 170) return "#20d67a";
+  if (value >= 160) return "#27b8ad";
+  if (value >= 150) return "#f0d719";
+  if (value >= 140) return "#d19f00";
+  if (value >= 130) return "#f03838";
+  if (value >= 120) return "#d52acb";
+  if (value >= 110) return "#a348ec";
+  if (value >= 100) return "#704fff";
+  if (value >= 90) return "#4e76ff";
+  if (value >= 80) return "#2aa8e6";
+  if (value >= 70) return "#eef7f1";
+  return "#65776d";
+};
+const sortedClubCareer = (rows: PlayerDetail["clubCareer"]) => {
+  const year = (value: string) => Number(value.match(/\d{4}/)?.[0] ?? 0);
+  return [...rows].sort((a,b)=>year(b.years)-year(a.years)||b.years.localeCompare(a.years,"ko-KR")||a.club.localeCompare(b.club,"ko-KR"));
+};
 
 function PlayerImage({ player, size = 52 }: { player: Player; size?: number }) {
   const [index, setIndex] = useState(0),
@@ -91,12 +112,26 @@ function PlayerImage({ player, size = 52 }: { player: Player; size?: number }) {
     </View>
   );
 }
+function CardImage({ card, size = 72, seasonImageUrl }: { card: Pick<PlayerCard, "name" | "imageUrls">; size?: number; seasonImageUrl?: string }) {
+  const [index, setIndex] = useState(0), [failed, setFailed] = useState(false), [seasonFailed, setSeasonFailed] = useState(false);
+  useEffect(()=>{setSeasonFailed(false)},[seasonImageUrl]);
+  const iconSize=Math.max(23,Math.round(size*.3));
+  return <View style={[s.cardPhoto,{width:size,height:size}]}>{failed?<Text style={s.photoText}>{card.name.slice(0,1)}</Text>:<Image source={{uri:card.imageUrls[index]}} style={{width:size,height:size}} resizeMode="contain" onError={()=>index+1<card.imageUrls.length?setIndex(index+1):setFailed(true)}/>}{!!seasonImageUrl&&!seasonFailed&&<Image source={{uri:seasonImageUrl}} style={[s.cardSeasonIcon,{width:iconSize,height:iconSize}]} resizeMode="contain" onError={()=>setSeasonFailed(true)}/>}</View>;
+}
 function Back({ onPress }: { onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={s.back}>
       <Text style={s.backText}>← 뒤로</Text>
     </Pressable>
   );
+}
+function EdgeSwipeBack({ onBack, children }: { onBack: () => void; children: React.ReactNode }) {
+  const responder=useMemo(()=>PanResponder.create({
+    onMoveShouldSetPanResponder:(_,gesture)=>gesture.x0<=30&&gesture.dx>12&&Math.abs(gesture.dy)<24,
+    onPanResponderRelease:(_,gesture)=>{if(gesture.dx>70&&Math.abs(gesture.dy)<55)onBack()},
+    onPanResponderTerminationRequest:()=>true,
+  }),[onBack]);
+  return <View style={s.flex} {...responder.panHandlers}>{children}</View>;
 }
 function Result({ value }: { value: string }) {
   const color = value === "승" ? C.green : value === "패" ? C.red : C.muted;
@@ -404,12 +439,10 @@ function Home({
 function MatchScreen({
   match,
   nickname,
-  onBack,
   onPlayer,
 }: {
   match: Match;
   nickname: string;
-  onBack: () => void;
   onPlayer: (id: number, side: Side) => void;
 }) {
   const shareCard = useRef<ViewShotRef>(null);
@@ -439,7 +472,6 @@ function MatchScreen({
   }
   return (
     <ScrollView contentContainerStyle={s.content}>
-      <Back onPress={onBack} />
       <Text style={s.centerMuted}>
         {date(match.matchDate)} · {match.controller}
       </Text>
@@ -636,13 +668,11 @@ function PlayerScreen({
   matches,
   id,
   side,
-  onBack,
   onMatch,
 }: {
   matches: Match[];
   id: number;
   side: Side;
-  onBack: () => void;
   onMatch: (m: Match) => void;
 }) {
   const rows = matches.flatMap((match) => {
@@ -655,7 +685,6 @@ function PlayerScreen({
   if (!player)
     return (
       <View style={s.content}>
-        <Back onPress={onBack} />
         <Text style={s.heading}>출전 기록 없음</Text>
       </View>
     );
@@ -666,7 +695,6 @@ function PlayerScreen({
     passSuccess = rows.reduce((a, r) => a + r.player.passSuccess, 0);
   return (
     <ScrollView contentContainerStyle={s.content}>
-      <Back onPress={onBack} />
       <View style={s.playerHero}>
         <PlayerImage player={player} size={90} />
         <View style={s.flex}>
@@ -751,6 +779,47 @@ function PlayerScreen({
   );
 }
 
+function MobilePriceBars({ rows }: { rows: Array<{ date: string; value: number }> }) {
+  const recent=rows.slice(-24),values=recent.map(row=>row.value),min=Math.min(...values),max=Math.max(...values),range=Math.max(max-min,1);
+  if(recent.length<2)return null;
+  return <View><View style={s.dbPriceBars}>{recent.map((row,index)=><View key={`${row.date}-${index}`} style={[s.dbPriceBar,{height:12+(row.value-min)/range*62}]}/>)}</View><View style={s.dbPriceDates}><Text style={s.muted}>{recent[0].date}</Text><Text style={s.muted}>{recent.at(-1)?.date}</Text></View></View>;
+}
+
+function TeamColorChoices({ label, value, options, onChange }: { label: string; value: string; options: Array<{ value: string; name: string }>; onChange: (value: string) => void }) {
+  return <View style={s.dbSelectorGroup}>
+    <Text style={s.dbSelectorLabel}>{label}</Text>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.dbSelectorRow}>
+      <Pressable style={[s.dbChoice,value==="0"&&s.dbChoiceActive]} onPress={()=>onChange("0")}><Text style={value==="0"?s.dbChoiceActiveText:s.muted}>적용 안 함</Text></Pressable>
+      {options.map(option=><Pressable key={`${label}-${option.value}`} style={[s.dbChoice,value===option.value&&s.dbChoiceActive]} onPress={()=>onChange(option.value)}><Text style={value===option.value?s.dbChoiceActiveText:s.muted}>{option.name}</Text></Pressable>)}
+    </ScrollView>
+  </View>;
+}
+
+function PlayerDatabase({ matches, onBack, onHeaderBackChange }: { matches: Match[]; onBack: () => void; onHeaderBackChange: (handler: (() => void) | null) => void }) {
+  const [query,setQuery]=useState(""),[rows,setRows]=useState<PlayerCard[]>([]),[loading,setLoading]=useState(false),[detailLoading,setDetailLoading]=useState(false),[error,setError]=useState(""),[selected,setSelected]=useState<PlayerCard|null>(null),[detail,setDetail]=useState<PlayerDetail|null>(null),[grade,setGrade]=useState(1),[favorites,setFavorites]=useState<number[]>([]);
+  const [detailOptions,setDetailOptions]=useState<PlayerDetailOptions>({adaptation:1}),[statFilter,setStatFilter]=useState("전체");
+  useEffect(()=>{void loadPlayerFavorites().then(setFavorites)},[]);
+  useEffect(()=>{if(!selected)return;let active=true;setDetailLoading(true);setError("");void fetchPlayerDetail(selected.spId,grade,detailOptions).then(value=>{if(active)setDetail(value)}).catch(reason=>{if(active)setError(reason instanceof Error?reason.message:"선수 상세 조회 실패")}).finally(()=>{if(active)setDetailLoading(false)});return()=>{active=false}},[selected,grade,detailOptions]);
+  const closeDetail=useCallback(()=>{setSelected(null);setDetail(null)},[]);
+  useEffect(()=>{onHeaderBackChange(selected?closeDetail:onBack);return()=>onHeaderBackChange(null)},[selected,closeDetail,onBack,onHeaderBackChange]);
+  async function run(){if(!query.trim()){setError("선수명을 입력해 주세요.");return}setLoading(true);setError("");try{setRows(await searchPlayers(query))}catch(reason){setError(reason instanceof Error?reason.message:"선수 검색 실패")}finally{setLoading(false)}}
+  function choose(card:PlayerCard){setSelected(card);setDetail(null);setGrade(1);setDetailOptions({adaptation:1});setStatFilter("전체");setError("")}
+  if(selected){
+    const appearances=matches.flatMap(match=>{const player=match.players.find(p=>p.spId===selected.spId&&p.rating>0);return player?[{match,player}]:[]});
+    return <EdgeSwipeBack onBack={closeDetail}><ScrollView contentContainerStyle={s.content}><View style={s.dbHero}><CardImage card={detail??selected} size={118} seasonImageUrl={selected.seasonImageUrl}/><View style={s.flex}><Text style={s.eyebrow}>PLAYER INFORMATION</Text><Text style={s.playerHeroName}>{selected.name}</Text><Text style={s.muted}>{selected.seasonName}</Text>{detail&&<><View style={s.dbOverallRow}><Text style={[s.dbOverall,{color:statColor(detail.overall)}]}>{detail.primaryPosition} {detail.overall}</Text>{detail.overallDelta>0&&<Text style={s.dbDelta}>+{detail.overallDelta}</Text>}</View><Text style={s.muted}>{detail.nation} · 급여 {detail.salary}</Text></>}</View><Pressable onPress={()=>void togglePlayerFavorite(selected.spId).then(setFavorites)} accessibilityLabel="선수 즐겨찾기"><Text style={s.favorite}>{favorites.includes(selected.spId)?"★":"☆"}</Text></Pressable></View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.dbGradeRow}><Text style={s.dbGradeLabel}>강화</Text>{Array.from({length:13},(_,index)=>index+1).map(value=><Pressable key={value} style={[s.dbGrade,value===grade&&s.dbGradeActive]} onPress={()=>{setGrade(value);setDetailOptions({adaptation:1})}}><Text style={value===grade?s.dbGradeActiveText:s.muted}>+{value}</Text></Pressable>)}</ScrollView>
+      {detailLoading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>능력치와 시세를 불러오는 중…</Text></View>}{error&&<Text style={s.error}>{error}</Text>}
+      {detail&&<><View style={s.dbTeamColor}><Text style={s.eyebrow}>TEAM COLOR DATABASE</Text><Text style={s.headingCompact}>능력치 적용 설정</Text><Text style={s.muted}>적응도와 팀컬러를 선택하면 기본 능력치 대비 상승값을 계산합니다.</Text><View style={s.dbSelectorGroup}><Text style={s.dbSelectorLabel}>적응도</Text><View style={s.dbSelectorRow}>{([1,5] as const).map(value=><Pressable key={value} style={[s.dbChoice,detailOptions.adaptation===value&&s.dbChoiceActive]} onPress={()=>setDetailOptions(current=>({...current,adaptation:value}))}><Text style={detailOptions.adaptation===value?s.dbChoiceActiveText:s.muted}>적응도 {value}</Text></Pressable>)}</View></View><TeamColorChoices label="강화 팀컬러" value={detailOptions.enhancementId?`${detailOptions.enhancementId}:${detailOptions.enhancementLevel??1}`:"0"} options={detail.teamColorOptions.enhancement.map(option=>({value:`${option.id}:${option.level}`,name:option.name}))} onChange={value=>{const [id,level]=value.split(":").map(Number);setDetailOptions(current=>({...current,enhancementId:id||0,enhancementLevel:level||0}))}}/><TeamColorChoices label="소속 팀컬러" value={String(detailOptions.affiliationId??0)} options={detail.teamColorOptions.affiliation.map(option=>({value:String(option.id),name:option.name}))} onChange={value=>setDetailOptions(current=>({...current,affiliationId:Number(value)}))}/><TeamColorChoices label="관계·특성 팀컬러" value={String(detailOptions.featureId??0)} options={detail.teamColorOptions.feature.map(option=>({value:String(option.id),name:option.name}))} onChange={value=>setDetailOptions(current=>({...current,featureId:Number(value)}))}/></View><View style={s.dbPills}>{[detail.birthDate,detail.height,detail.weight,detail.bodyType,`개인기 ${"★".repeat(detail.skillMoves)}`,`왼발 ${detail.leftFoot} · 오른발 ${detail.rightFoot}`].filter(Boolean).map(value=><Text style={s.dbPill} key={value}>{value}</Text>)}</View><View style={s.dbSummary}>{detail.summaryAbilities.map(row=><View style={s.dbSummaryCell} key={row.label}><Text style={s.muted}>{row.label}</Text><View style={s.dbValueRow}><Text style={[s.dbAbilityValue,{color:statColor(row.value)}]}>{row.value}</Text>{row.delta>0&&<Text style={s.dbDelta}>+{row.delta}</Text>}</View></View>)}</View>
+        <Text style={s.heading}>시세</Text><View style={s.dbPanel}><Text style={s.dbPrice}>{detail.currentPrice?`${detail.currentPrice.toLocaleString("ko-KR")} BP`:"시세 정보 없음"}</Text><MobilePriceBars rows={detail.priceHistory}/></View>
+        <Text style={s.heading}>특성</Text><View style={s.dbPills}>{detail.traits.map(value=><Text style={s.dbPill} key={value}>{value}</Text>)}</View>
+        <Text style={s.heading}>포지션별 오버롤</Text><View style={s.dbStatGrid}>{detail.positions.map(row=><View style={s.dbStat} key={row.position}><Text style={s.muted}>{row.position}</Text><View style={s.dbValueRow}><Text style={[s.dbAbilityValue,{color:statColor(row.value)}]}>{row.value}</Text>{row.delta>0&&<Text style={s.dbDelta}>+{row.delta}</Text>}</View></View>)}</View>
+        <Text style={s.heading}>세부 능력치</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.dbEffectFilter}><Pressable style={[s.dbEffectChip,statFilter==="전체"&&s.dbEffectChipActive]} onPress={()=>setStatFilter("전체")}><Text style={statFilter==="전체"?s.dbChoiceActiveText:s.muted}>전체</Text></Pressable>{detail.abilities.map(row=><Pressable key={row.label} style={[s.dbEffectChip,statFilter===row.label&&s.dbEffectChipActive]} onPress={()=>setStatFilter(row.label)}><Text style={statFilter===row.label?s.dbChoiceActiveText:s.muted}>{row.label}{row.delta>0&&` +${row.delta}`}</Text></Pressable>)}</ScrollView><View style={s.dbAbilityGrid}>{detail.abilities.filter(row=>statFilter==="전체"||row.label===statFilter).map(row=><View style={[s.dbAbility,row.delta>0&&s.dbAbilityBoosted]} key={row.label}><Text style={s.muted}>{row.label}</Text><View style={s.dbValueRow}><Text style={[s.dbPurple,{color:statColor(row.value)}]}>{row.value}</Text>{row.delta>0&&<Text style={s.dbDelta}>+{row.delta}</Text>}</View></View>)}</View>
+        <Text style={s.heading}>클럽 경력</Text><View style={s.dbPanel}>{detail.clubCareer.length?<><View style={[s.dbClub,s.dbClubHeader]}><Text style={s.dbClubYears}>기간</Text><Text style={s.dbClubName}>클럽</Text><Text style={s.dbClubLoan}>구분</Text></View>{sortedClubCareer(detail.clubCareer).map((row,index)=><View style={s.dbClub} key={`${row.years}-${row.club}-${index}`}><Text style={s.dbClubYears}>{row.years}</Text><Text style={s.dbClubName} numberOfLines={2}>{row.club}</Text><Text style={s.dbClubLoan}>{row.loan}</Text></View>)}</>:<Text style={s.muted}>등록된 클럽 경력이 없습니다.</Text>}</View></>}
+      <Text style={s.heading}>내 경기 기록</Text>{appearances.length?<View style={s.grid}><Kpi label="출전" value={`${appearances.length}`} note="조회 경기 기준"/><Kpi label="평균 평점" value={average(appearances.map(row=>row.player.rating)).toFixed(2)} note="내 경기 기록"/><Kpi label="골·도움" value={`${appearances.reduce((a,r)=>a+r.player.goals,0)} · ${appearances.reduce((a,r)=>a+r.player.assists,0)}`} note="누적 기록"/><Kpi label="사용 강화" value={`+${appearances[0].player.grade}`} note="사용 카드"/></View>:<Text style={s.warning}>현재 조회한 최근 경기에서는 이 시즌 카드의 출전 기록이 없습니다.</Text>}<Text style={s.dbNotice}>Data based on NEXON Open API · 선수 상세 정보는 EA SPORTS FC ONLINE 데이터센터 기반입니다.</Text></ScrollView></EdgeSwipeBack>;
+  }
+  return <EdgeSwipeBack onBack={onBack}><ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled"><Text style={s.eyebrow}>PLAYER INFORMATION</Text><Text style={s.playerHeroName}>선수 정보</Text><Text style={s.subtitle}>선수명으로 시즌 카드를 찾고 능력치·시세·내 경기 기록을 확인합니다.</Text><View style={s.dbSearch}><TextInput style={[s.input,s.flex]} value={query} onChangeText={setQuery} placeholder="예: 아르투로 비달" placeholderTextColor="#496055" returnKeyType="search" onSubmitEditing={()=>void run()} accessibilityLabel="선수명 검색"/><Pressable style={s.dbSearchButton} onPress={()=>void run()}><Text style={s.primaryText}>검색</Text></Pressable></View>{loading&&<ActivityIndicator color={C.green} style={{marginTop:24}}/>}{error&&<Text style={s.error}>{error}</Text>}{!loading&&query&&rows.length===0&&!error&&<Text style={s.warning}>검색 결과가 없습니다.</Text>}<View style={s.dbList}>{rows.map(card=>{const physical=[card.height,card.weight,card.bodyType].filter(Boolean).join(" · ")||"신체 정보 없음";return <Pressable style={s.dbRow} onPress={()=>choose(card)} key={card.spId} accessibilityLabel={`${card.name}, ${card.seasonName}, OVR ${card.overall||"정보 없음"}`}><CardImage card={card} seasonImageUrl={card.seasonImageUrl}/><View style={s.flex}><View style={s.dbResultNameRow}><Text style={s.playerName} numberOfLines={1}>{card.name}</Text><Text style={s.dbOvr}>OVR {card.overall||"-"}</Text></View><Text style={s.muted} numberOfLines={1}>{card.seasonName}</Text><Text style={s.dbMeta} numberOfLines={1}>주 포지션 {card.primaryPosition||"-"} · {physical}</Text><Text style={s.dbMeta}>주발 {card.preferredFoot||"-"} · 약발 {card.weakFoot||"-"}</Text></View><Text style={s.favorite}>{favorites.includes(card.spId)?"★":"☆"}</Text><Text style={s.arrow}>→</Text></Pressable>})}</View></ScrollView></EdgeSwipeBack>;
+}
+
 export default function App() {
   const [nickname, setNickname] = useState(""),
     [data, setData] = useState<Dashboard | null>(null),
@@ -759,7 +828,9 @@ export default function App() {
     [error, setError] = useState(""),
     [match, setMatch] = useState<Match | null>(null),
     [player, setPlayer] = useState<{ id: number; side: Side } | null>(null),
-    [searches, setSearches] = useState<SearchItem[]>([]);
+    [searches, setSearches] = useState<SearchItem[]>([]),
+    [playerDb, setPlayerDb] = useState(false);
+  const [headerBack,setHeaderBack]=useState<(() => void)|null>(null);
   useEffect(() => {
     void loadSearches().then(setSearches);
   }, []);
@@ -797,39 +868,66 @@ export default function App() {
   async function favorite() {
     if (data) setSearches(await toggleFavorite(data.profile.nickname));
   }
+  const closePlayerInfo=useCallback(()=>setPlayerDb(false),[]);
+  const changeHeaderBack=useCallback((handler:(()=>void)|null)=>setHeaderBack(handler?()=>handler:null),[]);
+  function openMatchFeature() {
+    setPlayerDb(false);
+    setHeaderBack(null);
+    setPlayer(null);
+    setMatch(null);
+  }
+  function openPlayerFeature() {
+    setPlayerDb(true);
+    setHeaderBack(null);
+    setPlayer(null);
+    setMatch(null);
+  }
+  function goBack() {
+    if (playerDb) return (headerBack??closePlayerInfo)();
+    if (player) return setPlayer(null);
+    if (match) setMatch(null);
+    else if (data) setData(null);
+  }
+  const canGoBack=Boolean(playerDb||player||match||data);
   return (
     <SafeAreaProvider>
       <SafeAreaView style={s.safe}>
         <StatusBar barStyle="light-content" />
         <View style={s.header}>
+          {canGoBack&&(
+            <Back onPress={goBack}/>
+          )}
           <Text style={s.logo} numberOfLines={1}>
             FC ONLINE LAB
           </Text>
-          <Text style={s.green}>MOBILE</Text>
+        </View>
+        <View style={s.mainFeatureNav}>
+          <Pressable style={[s.mainFeature, !playerDb&&s.mainFeatureActive]} onPress={openMatchFeature} accessibilityRole="tab" accessibilityState={{selected:!playerDb}}><Text style={[s.mainFeatureTitle,!playerDb&&s.mainFeatureTitleActive]}>경기·분석</Text><Text style={s.mainFeatureDescription}>구단주 전적과 경기 흐름</Text></Pressable>
+          <Pressable style={[s.mainFeature, playerDb&&s.mainFeatureActive]} onPress={openPlayerFeature} accessibilityRole="tab" accessibilityState={{selected:playerDb}}><Text style={[s.mainFeatureTitle,playerDb&&s.mainFeatureTitleActive]}>선수 정보</Text><Text style={s.mainFeatureDescription}>시즌 카드와 팀컬러 능력치</Text></Pressable>
         </View>
         <KeyboardAvoidingView
           style={s.flex}
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={0}
         >
-          {player && data ? (
-            <PlayerScreen
+          {playerDb ? (
+            <PlayerDatabase matches={data?.matches??[]} onBack={closePlayerInfo} onHeaderBackChange={changeHeaderBack}/>
+          ) : player && data ? (
+            <EdgeSwipeBack onBack={()=>setPlayer(null)}><PlayerScreen
               matches={data.matches}
               id={player.id}
               side={player.side}
-              onBack={() => setPlayer(null)}
               onMatch={(m) => {
                 setPlayer(null);
                 setMatch(m);
               }}
-            />
+            /></EdgeSwipeBack>
           ) : match && data ? (
-            <MatchScreen
+            <EdgeSwipeBack onBack={()=>setMatch(null)}><MatchScreen
               match={match}
               nickname={data.profile.nickname}
-              onBack={() => setMatch(null)}
               onPlayer={(id, side) => setPlayer({ id, side })}
-            />
+            /></EdgeSwipeBack>
           ) : data ? (
             <Home
               data={data}
@@ -859,7 +957,7 @@ export default function App() {
                     내 플레이를{`\n`}숫자로 읽다.
                   </Text>
                   <Text style={s.subtitle}>
-                    Android와 iOS에서 최근 경기와 선수 흐름을 확인하세요.
+                    최근 경기 흐름과 선수 기록을 한곳에서 확인하세요.
                   </Text>
                   <Text style={s.inputLabel}>구단주명</Text>
                   <TextInput

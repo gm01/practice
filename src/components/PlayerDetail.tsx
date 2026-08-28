@@ -7,9 +7,9 @@ const average = (values: number[]) => values.length ? values.reduce((sum, value)
 const percent = (value: number, total: number) => total ? Math.round(value / total * 100) : 0;
 const inverseResult: Record<string, string> = { 승: "패", 패: "승", 무: "무" };
 
-export default function PlayerDetail({ matches, spId, side, onBack, onOpenMatch }: {
+export default function PlayerDetail({ matches, spId, side, onOpenMatch }: {
   matches: MatchSummary[]; spId: number; side: "mine" | "opponent";
-  onBack: () => void; onOpenMatch: (matchId: string) => void;
+  onOpenMatch: (matchId: string) => void;
 }) {
   const report = useMemo(() => {
     const appearances = matches.flatMap(match => {
@@ -63,10 +63,9 @@ export default function PlayerDetail({ matches, spId, side, onBack, onOpenMatch 
     return { appearances, player, ratings, goals, assists, shots, effectiveShots, passTry, passSuccess, mainPosition, playerShots, resultRows, positionRows, gradeRows, scoringRows, teammates, starterGames, substituteGames };
   }, [matches, side, spId]);
 
-  if (!report.player) return <section className="player-detail-page"><button className="back-button" onClick={onBack}>← 선수 목록</button><div className="empty"><h3>선수 출전 기록을 찾지 못했습니다.</h3></div></section>;
+  if (!report.player) return <section className="player-detail-page"><div className="empty"><h3>선수 출전 기록을 찾지 못했습니다.</h3></div></section>;
   const best = Math.max(...report.ratings), worst = Math.min(...report.ratings), avgRating = average(report.ratings);
   return <section className="player-detail-page">
-    <button className="back-button" onClick={onBack}>← 선수 목록</button>
     <header className="player-detail-hero"><div className="player-detail-photo"><PlayerPhoto player={report.player}/></div><div><p className="eyebrow">PLAYER REPORT</p><h1>{report.player.name}</h1><span>{report.player.seasonName} · {report.mainPosition} · +{report.player.grade}강</span></div><strong>{avgRating.toFixed(2)}<small>평균 평점</small></strong></header>
     <div className="player-detail-kpis">
       <article><small>출전</small><b>{report.appearances.length}</b><span>최근 불러온 경기 기준</span></article>

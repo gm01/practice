@@ -1,10 +1,11 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatNexonDate } from "../shared/nexon";
 import { RankerView, TradeView } from "./components/FeatureViews";
 import PlayerPhoto from "./components/PlayerPhoto";
 import appIcon from "./assets/app-icon.png";
 import AnalysisReport from "./components/AnalysisReport";
 import PlayerDetail from "./components/PlayerDetail";
+import PlayerDatabase from "./components/PlayerDatabase";
 
 type DetailTab = "summary" | "stats" | "lineup" | "shots";
 const resultLabel: Record<string, string> = {
@@ -196,12 +197,10 @@ function ShotMap({ match }: { match: MatchSummary }) {
 function MatchDetail({
   match,
   myNickname,
-  onBack,
   onSelectPlayer,
 }: {
   match: MatchSummary;
   myNickname: string;
-  onBack: () => void;
   onSelectPlayer: (spId: number, side: "mine" | "opponent") => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("summary");
@@ -223,9 +222,6 @@ function MatchDetail({
     );
   return (
     <section className="match-page">
-      <button className="back-button" onClick={onBack}>
-        ← 최근 경기
-      </button>
       <div className="match-hero">
         <p>
           {formatNexonDate(match.matchDate)} · 공식경기 · {match.controller}
@@ -529,11 +525,13 @@ export default function App() {
     { id: 52, name: "감독모드" },
     { id: 60, name: "공식 친선" },
   ]);
-  const [view, setView] = useState<"matches" | "trades" | "ranker">("matches");
+  const [view, setView] = useState<"matches" | "trades" | "ranker" | "players">("matches");
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [tradeOwner, setTradeOwner] = useState("");
   const [rankers, setRankers] = useState<RankerRecord[]>([]);
   const [featureLoading, setFeatureLoading] = useState(false);
+  const [playerInfoBack,setPlayerInfoBack]=useState<(() => void)|null>(null);
+  const changePlayerInfoBack=useCallback((handler:(()=>void)|null)=>setPlayerInfoBack(handler?()=>handler:null),[]);
   const tradeRequestId = useRef(0);
   const [searches, setSearches] = useState<SearchItem[]>(() => readSearches());
   useEffect(() => {
@@ -723,26 +721,33 @@ export default function App() {
     void loadMatches(0);
   }
   const selectedMatch = matches.find((match) => match.id === selectedId);
+  const showTopBack=Boolean(selectedPlayer||selectedMatch||playerInfoBack);
+  function goBackFromTop() {
+    if (selectedPlayer) return setSelectedPlayer(null);
+    if (selectedMatch) return setSelectedId(null);
+    playerInfoBack?.();
+  }
   return (
     <main className="shell">
-      <header className="topbar">
+      <header className={`topbar${showTopBack?" has-back":""}`}>
+        {showTopBack&&<button className="topbar-back" onClick={goBackFromTop}>← 뒤로</button>}
         <div className="brand">
           <img className="brand-mark" src={appIcon} alt="FC Online Lab" />
           <span>ONLINE LAB</span>
         </div>
-        <button
-          className="login-link"
-          onClick={() => void window.fcOnline.openLogin()}
-        >
-          넥슨 로그인 ↗
-        </button>
+        <div className="top-actions">
+          <nav className="main-feature-nav" aria-label="주요 기능">
+            <button className={view === "matches" ? "active" : ""} onClick={() => { setSelectedPlayer(null); setSelectedId(null); setPlayerInfoBack(null); setView("matches"); }}><b>경기·분석</b><span>구단주 전적과 경기 흐름</span></button>
+            <button className={view === "players" ? "active" : ""} onClick={() => { setSelectedPlayer(null); setSelectedId(null); setView("players"); }}><b>선수 정보</b><span>시즌 카드와 팀컬러 능력치</span></button>
+          </nav>
+          <button className="login-link" onClick={() => void window.fcOnline.openLogin()}>넥슨 로그인 ↗</button>
+        </div>
       </header>
       {selectedPlayer ? (
         <PlayerDetail
           matches={matches}
           spId={selectedPlayer.spId}
           side={selectedPlayer.side}
-          onBack={() => setSelectedPlayer(null)}
           onOpenMatch={(matchId) => {
             setSelectedPlayer(null);
             setSelectedId(matchId);
@@ -752,9 +757,10 @@ export default function App() {
         <MatchDetail
           match={selectedMatch}
           myNickname={profile?.nickname ?? nickname}
-          onBack={() => setSelectedId(null)}
           onSelectPlayer={(spId, side) => setSelectedPlayer({ spId, side })}
         />
+      ) : view === "players" ? (
+        <section className="dashboard standalone-player-info"><PlayerDatabase matches={matches} onHeaderBackChange={changePlayerInfoBack} /></section>
       ) : (
         <>
           <section className="hero">
@@ -896,6 +902,7 @@ export default function App() {
               >
                 경기·분석
               </button>
+              <button onClick={() => setView("players")}>선수 정보</button>
               <button
                 disabled
                 title="NEXON API에서 구단주별 거래 조회를 지원하지 않습니다"

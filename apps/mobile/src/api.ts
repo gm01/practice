@@ -1,6 +1,19 @@
 import type { Dashboard } from "./types";
 
-const API = "https://fc-online-lab-api.bebebe97.workers.dev";
+const API = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || "https://fc-online-lab-api.bebebe97.workers.dev";
+
+export type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; overall: number; primaryPosition: string; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string };
+export type PlayerDetail = {
+  spId: number; grade: number; name: string; seasonId: number; seasonName: string; overall: number; baseOverall: number; overallDelta: number; primaryPosition: string; salary: number;
+  birthDate: string; height: string; weight: string; bodyType: string; playerClass: string; skillMoves: number; leftFoot: number; rightFoot: number;
+  nation: string; traits: string[]; positions: Array<{ position: string; value: number; baseValue: number; delta: number }>; summaryAbilities: Array<{ label: string; value: number; baseValue: number; delta: number }>;
+  abilities: Array<{ label: string; value: number; baseValue: number; delta: number }>; clubCareer: Array<{ years: string; club: string; loan: string }>;
+  rankerStats: Record<string, string>; rankerUpdatedAt: string; currentPrice: number; priceHistory: Array<{ date: string; value: number }>;
+  teamColorOptions: { enhancement: Array<{ id: number; level: number; name: string }>; affiliation: Array<{ id: number; level: number; name: string }>; feature: Array<{ id: number; level: number; name: string }> };
+  selection: { adaptation: 1 | 5; affiliationId: number; enhancementId: number; enhancementLevel: number; featureId: number };
+  imageUrls: string[]; sourceUrl: string; source: string;
+};
+export type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
 
 type ErrorBody = { error?: { code?: string; message?: string } };
 
@@ -32,4 +45,34 @@ export async function fetchDashboard(nickname: string): Promise<Dashboard> {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function searchPlayers(query: string): Promise<PlayerCard[]> {
+  const url = new URL("/v1/players/search", API);
+  url.searchParams.set("q", query.trim());
+  url.searchParams.set("limit", "40");
+  const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as ErrorBody;
+    throw new DashboardError(body.error?.message ?? "선수 검색에 실패했습니다.", response.status === 429 ? "rate-limit" : "server");
+  }
+  const body = await response.json() as { players: PlayerCard[] };
+  return body.players;
+}
+
+export async function fetchPlayerDetail(spId: number, grade: number, options: PlayerDetailOptions = {}): Promise<PlayerDetail> {
+  const url = new URL("/v1/players/detail", API);
+  url.searchParams.set("spid", String(spId));
+  url.searchParams.set("grade", String(grade));
+  if (options.adaptation) url.searchParams.set("adaptation", String(options.adaptation));
+  if (options.affiliationId) url.searchParams.set("affiliationId", String(options.affiliationId));
+  if (options.enhancementId) url.searchParams.set("enhancementId", String(options.enhancementId));
+  if (options.enhancementLevel) url.searchParams.set("enhancementLevel", String(options.enhancementLevel));
+  if (options.featureId) url.searchParams.set("featureId", String(options.featureId));
+  const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as ErrorBody;
+    throw new DashboardError(body.error?.message ?? "선수 상세 정보를 불러오지 못했습니다.", response.status === 429 ? "rate-limit" : "server");
+  }
+  return response.json() as Promise<PlayerDetail>;
 }

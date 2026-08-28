@@ -1,5 +1,6 @@
 const API = "https://open.api.nexon.com/fconline/v1";
 const META = "https://open.api.nexon.com/static/fconline/meta";
+const DATA_CENTER = "https://fconline.nexon.com";
 const MAX_MATCHES = 20;
 
 interface Env {
@@ -256,6 +257,272 @@ async function dashboard(url: URL, env: Env) {
   };
 }
 
+async function searchPlayers(url: URL) {
+  const query = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("ko-KR");
+  const seasonId = Number(url.searchParams.get("seasonId") ?? 0);
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 30), 1), 40);
+  if (!query || query.length > 40) throw new ApiError(400, "검색할 선수명을 입력해 주세요.", "INVALID_PLAYER_QUERY");
+  const meta = await loadMetadata();
+  const baseRows = [...meta.players.entries()]
+    .filter(([spId, name]) => (!seasonId || Math.floor(spId / 1_000_000) === seasonId) && name.toLocaleLowerCase("ko-KR").includes(query))
+    .map(([spId, name]) => {
+      const cardSeasonId = Math.floor(spId / 1_000_000);
+      const pid = String(spId % 1_000_000);
+      return {
+        spId,
+        name,
+        seasonId: cardSeasonId,
+        seasonName: meta.seasons.get(cardSeasonId) ?? "시즌 정보 없음",
+        imageUrls: [
+          `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${spId}.png`,
+          `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${spId}.png`,
+          `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${pid}.png`,
+        ],
+        seasonImageUrl: `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/season/seasonicon/${cardSeasonId}.png`,
+      };
+    })
+    .sort((a, b) => Number(b.name === query) - Number(a.name === query) || Number(b.name.startsWith(query)) - Number(a.name.startsWith(query)) || b.seasonId - a.seasonId)
+    .slice(0, limit);
+  const rows: Array<(typeof baseRows)[number] & Awaited<ReturnType<typeof playerSearchFacts>>> = [];
+  for (let index = 0; index < baseRows.length; index += 8) {
+    const batch = baseRows.slice(index, index + 8);
+    const facts = await Promise.allSettled(batch.map(card => playerSearchFacts(card.spId)));
+    batch.forEach((card, batchIndex) => rows.push({
+      ...card,
+      ...(facts[batchIndex]?.status === "fulfilled" ? facts[batchIndex].value : emptyPlayerSearchFacts()),
+    }));
+  }
+  rows.sort((a, b) => b.overall - a.overall || b.seasonId - a.seasonId || a.name.localeCompare(b.name, "ko-KR"));
+  return { query: url.searchParams.get("q")?.trim(), count: rows.length, players: rows, source: "NEXON Open API metadata" };
+}
+
+function decodeHtml(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function firstMatch(html: string, expression: RegExp, fallback = "") {
+  return decodeHtml(expression.exec(html)?.[1] ?? fallback);
+}
+
+function classText(html: string, className: string) {
+  return firstMatch(html, new RegExp(`<[^>]+class=["'][^"']*\\b${className}\\b[^"']*["'][^>]*>([\\s\\S]*?)<\\/[^>]+>`, "i"));
+}
+
+async function dataCenterFetch(path: string, init?: RequestInit) {
+  const response = await fetch(`${DATA_CENTER}${path}`, {
+    ...init,
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "Accept-Language": "ko-KR,ko;q=0.9",
+      Referer: `${DATA_CENTER}/DataCenter`,
+      ...(init?.headers ?? {}),
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new ApiError(502, `FC 온라인 데이터센터 응답 오류 (${response.status})`, "DATA_CENTER_UNAVAILABLE");
+  return response.text();
+}
+
+function emptyPlayerSearchFacts() {
+  return { overall: 0, primaryPosition: "-", height: "", weight: "", bodyType: "", leftFoot: 0, rightFoot: 0, weakFoot: 0, preferredFoot: "-" };
+}
+
+async function playerSearchFacts(spId: number) {
+  const form = new URLSearchParams({
+    spid: String(spId), n1Strong: "1", n1Grow: "0", n4TeamColorId: "0", n4TeamColorLv: "0",
+    n4TeamColorId_Enhance: "0", n4TeamColorLv_Enhance: "0", n4TeamColorId_Feature: "0", n1Change: "0", strPlayerImg: "",
+  });
+  const html = await dataCenterFetch("/datacenter/PlayerAbility", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    body: form.toString(),
+  });
+  const foot = firstMatch(html, /<span class="etc foot">([\s\S]*?)<\/span>/i);
+  const leftFoot = Number(/L\s*(\d+)/i.exec(foot)?.[1] ?? 0);
+  const rightFoot = Number(/R\s*(\d+)/i.exec(foot)?.[1] ?? 0);
+  return {
+    overall: Number(firstMatch(html, /<div class="ovr value">\s*(\d+)/i, "0")),
+    primaryPosition: firstMatch(html, /<div class="position">([\s\S]*?)<\/div>/i, "-"),
+    height: classText(html, "height"),
+    weight: classText(html, "weight"),
+    bodyType: classText(html, "physical"),
+    leftFoot,
+    rightFoot,
+    weakFoot: Math.min(leftFoot, rightFoot),
+    preferredFoot: leftFoot === rightFoot ? "양발" : leftFoot > rightFoot ? "왼발" : "오른발",
+  };
+}
+
+function parseAbilities(html: string) {
+  const start = html.indexOf('<div class="content_bottom">');
+  const scope = start >= 0 ? html.slice(start) : html;
+  const rows: Array<{ label: string; value: number }> = [];
+  const expression = /<li class="ab"[\s\S]*?<div class="txt">([\s\S]*?)<\/div>\s*<div class="value[^"]*">\s*(\d+)/gi;
+  for (const match of scope.matchAll(expression)) rows.push({ label: decodeHtml(match[1]), value: Number(match[2]) });
+  return rows.filter((row, index) => row.label && rows.findIndex(candidate => candidate.label === row.label) === index);
+}
+
+function parseSummaryAbilities(html: string) {
+  const start = html.indexOf('<div class="content_middle">');
+  const end = html.indexOf('<div class="content_bottom">');
+  const scope = start >= 0 && end > start ? html.slice(start, end) : "";
+  const rows: Array<{ label: string; value: number }> = [];
+  const expression = /<li class="ab">\s*<div class="txt">([\s\S]*?)<\/div>\s*<div class="value[^"]*">\s*(\d+)/gi;
+  for (const match of scope.matchAll(expression)) rows.push({ label: decodeHtml(match[1]), value: Number(match[2]) });
+  return rows.slice(-6);
+}
+
+function parsePositions(html: string) {
+  const scope = /<div class="ovr_set">([\s\S]*?)<\/div>\s*<\/div>/.exec(html)?.[1] ?? "";
+  const rows: Array<{ position: string; value: number }> = [];
+  for (const match of scope.matchAll(/<div class="position\s+([a-z]+)\s+value">\s*(\d+)/gi)) {
+    rows.push({ position: match[1].toUpperCase(), value: Number(match[2]) });
+  }
+  return rows;
+}
+
+function parseTraits(html: string) {
+  const scope = /<div class="skill_wrap">([\s\S]*?)<div class="en_selector_wrap">/i.exec(html)?.[1] ?? "";
+  return [...scope.matchAll(/<span class="desc">([\s\S]*?)<\/span>/gi)].map(match => decodeHtml(match[1])).filter(Boolean);
+}
+
+type TeamColorOption = { id: number; level: number; name: string };
+
+function parseTeamColorLinks(scope: string, idIndex: number, levelIndex?: number): TeamColorOption[] {
+  const rows: TeamColorOption[] = [];
+  const expression = /<a[^>]*onclick="DataCenter\.GetPlayerAbility\(([^)]*)\);?"[^>]*>([\s\S]*?)<\/a>/gi;
+  for (const match of scope.matchAll(expression)) {
+    const args = match[1].split(",").map(value => Number(value.trim()));
+    const id = args[idIndex] ?? 0;
+    const level = levelIndex === undefined ? 1 : args[levelIndex] ?? 1;
+    const name = decodeHtml(match[2]);
+    if (id > 0 && name) rows.push({ id, level, name });
+  }
+  return rows.filter((row, index) => rows.findIndex(candidate => candidate.id === row.id && candidate.level === row.level) === index);
+}
+
+function parseTeamColorOptions(html: string) {
+  const start = html.indexOf('<div class="teamcolor_selector_wrap">');
+  const end = html.indexOf('<div class="ovr_set">', start);
+  const scope = start >= 0 ? html.slice(start, end > start ? end : undefined) : "";
+  const affiliationStart = scope.indexOf('<div class="tdefault">');
+  const featureStart = scope.indexOf('<div class="tspecial">');
+  const enhancementScope = scope.slice(0, affiliationStart >= 0 ? affiliationStart : undefined);
+  const affiliationScope = affiliationStart >= 0 ? scope.slice(affiliationStart, featureStart >= 0 ? featureStart : undefined) : "";
+  const featureScope = featureStart >= 0 ? scope.slice(featureStart) : "";
+  return {
+    enhancement: parseTeamColorLinks(enhancementScope, 5, 6),
+    affiliation: parseTeamColorLinks(affiliationScope, 3, 4),
+    feature: parseTeamColorLinks(featureScope, 7),
+  };
+}
+
+function parseClubCareer(html: string) {
+  const scope = /<div class="content data_detail_club">([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i.exec(html)?.[1] ?? "";
+  const rows: Array<{ years: string; club: string; loan: string }> = [];
+  for (const match of scope.matchAll(/<li>[\s\S]*?<div class="td year">([\s\S]*?)<\/div>[\s\S]*?<div class="td club">([\s\S]*?)<\/div>[\s\S]*?<div class="td rent">([\s\S]*?)<\/div>[\s\S]*?<\/li>/gi)) {
+    rows.push({ years: decodeHtml(match[1]), club: decodeHtml(match[2]), loan: decodeHtml(match[3]) });
+  }
+  return rows;
+}
+
+function parseRankerStats(html: string) {
+  const scope = /<div class="ranker_record">([\s\S]*?)<div class="view_wrap">/i.exec(html)?.[1] ?? "";
+  const labels = ["출전", "득점", "도움", "유효 슈팅", "일반 슈팅", "패스 성공률", "드리블 성공률", "공중볼 경합 성공률", "가로채기", "태클 성공률", "차단 성공률", "선방", "평점"];
+  const values = [...scope.matchAll(/<span class="td[^"']*">([\s\S]*?)<\/span>/gi)].map(match => decodeHtml(match[1]));
+  return Object.fromEntries(labels.map((label, index) => [label, values[index] ?? "-"]));
+}
+
+function parsePrice(html: string) {
+  const current = Number((/<strong\s+alt="([\d,]+)"/i.exec(html)?.[1] ?? "0").replace(/,/g, ""));
+  let history: Array<{ date: string; value: number }> = [];
+  const jsonText = /var json1\s*=\s*({[\s\S]*?})\s*var option\s*=/i.exec(html)?.[1] ?? "";
+  if (jsonText) {
+    const timeBlock = /"time"\s*:\s*\[([\s\S]*?)\]/i.exec(jsonText)?.[1] ?? "";
+    const valueBlock = /"value"\s*:\s*\[([\s\S]*?)\]/i.exec(jsonText)?.[1] ?? "";
+    const dates = [...timeBlock.matchAll(/"([^"]+)"/g)].map(match => match[1]);
+    const values = [...valueBlock.matchAll(/"([\d.]+)"/g)].map(match => Number(match[1]));
+    history = values.map((value, index) => ({ date: dates[index] ?? "", value })).filter(item => item.date && Number.isFinite(item.value));
+  }
+  return { current, history: history.slice(-365) };
+}
+
+async function playerDetail(url: URL) {
+  const spId = Number(url.searchParams.get("spid"));
+  const grade = Number(url.searchParams.get("grade") ?? 1);
+  const grow = url.searchParams.get("adaptation") === "5" ? 4 : 0;
+  const affiliationId = Number(url.searchParams.get("affiliationId") ?? 0);
+  const enhancementId = Number(url.searchParams.get("enhancementId") ?? 0);
+  const enhancementLevel = Number(url.searchParams.get("enhancementLevel") ?? 0);
+  const featureId = Number(url.searchParams.get("featureId") ?? 0);
+  if (!Number.isInteger(spId) || spId < 1) throw new ApiError(400, "선수 식별자가 올바르지 않습니다.", "INVALID_SPID");
+  if (!Number.isInteger(grade) || grade < 0 || grade > 13) throw new ApiError(400, "강화 단계는 0~13 사이여야 합니다.", "INVALID_GRADE");
+  if ([affiliationId, enhancementId, enhancementLevel, featureId].some(value => !Number.isInteger(value) || value < 0)) throw new ApiError(400, "팀컬러 선택값이 올바르지 않습니다.", "INVALID_TEAM_COLOR");
+
+  const detailPath = `/DataCenter/PlayerInfo?spid=${spId}&n1Strong=${grade}`;
+  const baseForm = new URLSearchParams({
+    spid: String(spId), n1Strong: String(grade), n1Grow: "0", n4TeamColorId: "0", n4TeamColorLv: "0",
+    n4TeamColorId_Enhance: "0", n4TeamColorLv_Enhance: "0", n4TeamColorId_Feature: "0", n1Change: "0", strPlayerImg: "",
+  });
+  const appliedForm = new URLSearchParams({
+    spid: String(spId), n1Strong: String(grade), n1Grow: String(grow), n4TeamColorId: String(affiliationId), n4TeamColorLv: "1",
+    n4TeamColorId_Enhance: String(enhancementId), n4TeamColorLv_Enhance: String(enhancementLevel), n4TeamColorId_Feature: String(featureId), n1Change: "1", strPlayerImg: "",
+  });
+  const post = (body: string) => ({ method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: `${DATA_CENTER}${detailPath}` }, body }) satisfies RequestInit;
+  const hasModifiers = grow > 0 || affiliationId > 0 || enhancementId > 0 || featureId > 0;
+  const [pageHtml, baseAbilityHtml, priceHtml, meta] = await Promise.all([
+    dataCenterFetch(detailPath), dataCenterFetch("/datacenter/PlayerAbility", post(baseForm.toString())),
+    dataCenterFetch("/datacenter/PlayerPriceGraph", post(new URLSearchParams({ spid: String(spId), n1strong: String(grade) }).toString())), loadMetadata(),
+  ]);
+  const abilityHtml = hasModifiers ? await dataCenterFetch("/datacenter/PlayerAbility", post(appliedForm.toString())) : baseAbilityHtml;
+  const basePositions = parsePositions(baseAbilityHtml);
+  const positions = parsePositions(abilityHtml).map(row => ({ ...row, baseValue: basePositions.find(base => base.position === row.position)?.value ?? row.value, delta: row.value - (basePositions.find(base => base.position === row.position)?.value ?? row.value) }));
+  const baseAbilities = parseAbilities(baseAbilityHtml);
+  const abilities = parseAbilities(abilityHtml).map(row => ({ ...row, baseValue: baseAbilities.find(base => base.label === row.label)?.value ?? row.value, delta: row.value - (baseAbilities.find(base => base.label === row.label)?.value ?? row.value) }));
+  const baseSummary = parseSummaryAbilities(baseAbilityHtml);
+  const summaryAbilities = parseSummaryAbilities(abilityHtml).map(row => ({ ...row, baseValue: baseSummary.find(base => base.label === row.label)?.value ?? row.value, delta: row.value - (baseSummary.find(base => base.label === row.label)?.value ?? row.value) }));
+  const seasonId = Math.floor(spId / 1_000_000);
+  const pid = spId % 1_000_000;
+  const foot = /<span class="etc foot">([\s\S]*?)<\/span>/i.exec(abilityHtml)?.[1] ?? "";
+  const leftFoot = Number(/L\s*(\d+)/i.exec(decodeHtml(foot))?.[1] ?? 0);
+  const rightFoot = Number(/R\s*(\d+)/i.exec(decodeHtml(foot))?.[1] ?? 0);
+  const name = firstMatch(abilityHtml, /<div class="name">([\s\S]*?)<\/div>/i, meta.players.get(spId) ?? `선수 ${spId}`);
+  const price = parsePrice(priceHtml);
+  const overall = Number(firstMatch(abilityHtml, /<div class="ovr value">\s*(\d+)/i, "0"));
+  const baseOverall = Number(firstMatch(baseAbilityHtml, /<div class="ovr value">\s*(\d+)/i, "0"));
+  return {
+    spId, grade, name, seasonId, seasonName: meta.seasons.get(seasonId) ?? "시즌 정보 없음",
+    overall, baseOverall, overallDelta: overall - baseOverall,
+    primaryPosition: firstMatch(abilityHtml, /<div class="position">([\s\S]*?)<\/div>/i, positions[0]?.position ?? "-"),
+    salary: Number(firstMatch(abilityHtml, /<div class="pay">[\s\S]*?<span>\s*(\d+)/i, "0")),
+    birthDate: classText(abilityHtml, "birth"), height: classText(abilityHtml, "height"), weight: classText(abilityHtml, "weight"),
+    bodyType: classText(abilityHtml, "physical"), playerClass: classText(abilityHtml, "season"),
+    skillMoves: (/<span class="etc skill">\s*<span>([^<]*)<\/span>/i.exec(abilityHtml)?.[1].match(/★/g) ?? []).length,
+    leftFoot, rightFoot,
+    nation: firstMatch(abilityHtml, /<div class="etc nation">[\s\S]*?<span class="txt">([\s\S]*?)<\/span>/i),
+    traits: parseTraits(abilityHtml), positions, summaryAbilities, abilities, teamColorOptions: parseTeamColorOptions(baseAbilityHtml),
+    selection: { adaptation: grow ? 5 : 1, affiliationId, enhancementId, enhancementLevel, featureId },
+    clubCareer: parseClubCareer(pageHtml), rankerStats: parseRankerStats(pageHtml),
+    rankerUpdatedAt: firstMatch(pageHtml, /업데이트 일시\s*:\s*([\d-]+)/i), currentPrice: price.current, priceHistory: price.history,
+    imageUrls: [
+      `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersActionHigh/p${spId}.png`,
+      `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${spId}.png`,
+      `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${spId}.png`,
+      `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${pid}.png`,
+    ],
+    sourceUrl: `${DATA_CENTER}${detailPath}`,
+    source: "EA SPORTS FC ONLINE Data Center / NEXON Open API metadata",
+  };
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(request, env) });
@@ -265,7 +532,10 @@ export default {
       if (url.pathname === "/" || url.pathname === "/health") {
         return json(request, env, { ok: true, service: "FC Online Lab API", version: "0.1.0" }, 200, { "Cache-Control": "no-store" });
       }
-      if (url.pathname !== "/v1/dashboard") throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND");
+      const isDashboard = url.pathname === "/v1/dashboard";
+      const isPlayerSearch = url.pathname === "/v1/players/search";
+      const isPlayerDetail = url.pathname === "/v1/players/detail";
+      if (!isDashboard && !isPlayerSearch && !isPlayerDetail) throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND");
       checkRateLimit(request);
 
       const cache = await caches.open("fc-online-lab-api");
@@ -275,7 +545,7 @@ export default {
       const cached = await cache.match(cacheKey);
       if (cached) return new Response(cached.body, { status: cached.status, headers: { ...Object.fromEntries(cached.headers), ...corsHeaders(request, env), "X-Cache": "HIT" } });
 
-      const result = await dashboard(url, env);
+      const result = isPlayerSearch ? await searchPlayers(url) : isPlayerDetail ? await playerDetail(url) : await dashboard(url, env);
       const ttl = Math.min(Math.max(Number(env.CACHE_TTL_SECONDS) || 90, 30), 300);
       const response = json(request, env, result, 200, { "Cache-Control": `public, max-age=${ttl}`, "X-Cache": "MISS" });
       ctx.waitUntil(cache.put(cacheKey, response.clone()));
