@@ -392,14 +392,32 @@ async function fetchServiceDashboard(nickname: string, offset: number, matchType
   };
 }
 
-async function fetchServicePlayers(query: string) {
+type PlayerAbilityFilter = { label: string; min?: number; max?: number };
+type PlayerSearchFilters = { query: string; seasonIds?: number[]; positions?: string[]; grade?: number; overallMin?: number; overallMax?: number; salaryMin?: number; salaryMax?: number; heightMin?: number; heightMax?: number; weightMin?: number; weightMax?: number; bodyTypes?: string[]; preferredFoot?: string; weakFootMin?: number; weakFootMax?: number; skillMovesMin?: number; skillMovesMax?: number; nation?: string; includeTraits?: string[]; excludeTraits?: string[]; abilities?: PlayerAbilityFilter[]; sort?: string; limit?: number };
+
+function appendPlayerFilters(url: URL, filters: PlayerSearchFilters) {
+  url.searchParams.set("q", filters.query.trim());
+  for (const [key, value] of Object.entries(filters)) {
+    if (key === "query" || value === undefined || value === "" || (Array.isArray(value) && !value.length)) continue;
+    if (key === "abilities") url.searchParams.set(key, (value as PlayerAbilityFilter[]).map(row => `${row.label}:${row.min ?? ""}:${row.max ?? ""}`).join(","));
+    else url.searchParams.set(key, Array.isArray(value) ? value.join(",") : String(value));
+  }
+}
+
+async function fetchServicePlayers(filters: PlayerSearchFilters) {
   const url = new URL("/v1/players/search", SERVICE_API);
-  url.searchParams.set("q", query);
-  url.searchParams.set("limit", "50");
-  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+  appendPlayerFilters(url, { limit: 40, ...filters });
+  const response = await fetch(url, { signal: AbortSignal.timeout(40_000) });
   const body = await response.json().catch(() => ({})) as { players?: unknown[]; error?: { message?: string } };
   if (!response.ok) throw new Error(body.error?.message ?? "선수 검색에 실패했습니다.");
   return body.players ?? [];
+}
+
+async function fetchServicePlayerFilters() {
+  const response = await fetch(new URL("/v1/players/filters", SERVICE_API), { signal: AbortSignal.timeout(20_000) });
+  const body = await response.json().catch(() => ({})) as { error?: { message?: string } };
+  if (!response.ok) throw new Error(body.error?.message ?? "검색 조건을 불러오지 못했습니다.");
+  return body;
 }
 
 type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; affiliationLevel?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
@@ -428,7 +446,11 @@ app.whenReady().then(() => {
       allowedMatchTypes.has(input?.matchType) ? input.matchType : 50,
     ),
   );
-  ipcMain.handle("players:search", (_event, query: string) => fetchServicePlayers(requireText(query, "선수명", 40)));
+  ipcMain.handle("players:search", (_event, filters: PlayerSearchFilters) => {
+    if (!filters || typeof filters !== "object" || typeof filters.query !== "string" || filters.query.length > 40) throw new Error("선수 검색 조건이 올바르지 않습니다.");
+    return fetchServicePlayers(filters);
+  });
+  ipcMain.handle("players:filters", () => fetchServicePlayerFilters());
   ipcMain.handle("players:detail", (_event, input: { spId: number; grade: number; options?: PlayerDetailOptions }) => {
     if (!Number.isInteger(input?.spId) || input.spId < 1) throw new Error("선수 식별자가 올바르지 않습니다.");
     const grade = Number.isInteger(input?.grade) && input.grade >= 0 && input.grade <= 13 ? input.grade : 1;

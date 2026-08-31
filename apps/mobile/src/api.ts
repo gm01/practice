@@ -2,7 +2,10 @@ import type { Dashboard } from "./types";
 
 const API = process.env.EXPO_PUBLIC_API_BASE_URL?.trim() || "https://fc-online-lab-api.bebebe97.workers.dev";
 
-export type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; overall: number; primaryPosition: string; salary: number; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string };
+export type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; grade: number; overall: number; primaryPosition: string; salary: number; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string; skillMoves: number; nation: string; traits: string[]; abilities: Array<{ label: string; value: number }> };
+export type PlayerAbilityFilter = { label: string; min?: number; max?: number };
+export type PlayerSearchFilters = { query: string; seasonIds?: number[]; positions?: string[]; grade?: number; overallMin?: number; overallMax?: number; salaryMin?: number; salaryMax?: number; heightMin?: number; heightMax?: number; weightMin?: number; weightMax?: number; bodyTypes?: string[]; preferredFoot?: string; weakFootMin?: number; weakFootMax?: number; skillMovesMin?: number; skillMovesMax?: number; nation?: string; includeTraits?: string[]; excludeTraits?: string[]; abilities?: PlayerAbilityFilter[]; sort?: string; limit?: number };
+export type PlayerFilterMetadata = { seasons: Array<{ id: number; name: string; imageUrl: string }>; positions: string[]; abilities: string[]; bodyTypes: string[] };
 export type PlayerDetail = {
   spId: number; grade: number; name: string; seasonId: number; seasonName: string; overall: number; baseOverall: number; overallDelta: number; primaryPosition: string; salary: number;
   birthDate: string; height: string; weight: string; bodyType: string; playerClass: string; skillMoves: number; leftFoot: number; rightFoot: number;
@@ -47,10 +50,18 @@ export async function fetchDashboard(nickname: string): Promise<Dashboard> {
   }
 }
 
-export async function searchPlayers(query: string): Promise<PlayerCard[]> {
+function appendPlayerFilters(url: URL, filters: PlayerSearchFilters) {
+  url.searchParams.set("q", filters.query.trim());
+  for (const [key, value] of Object.entries(filters)) {
+    if (key === "query" || value === undefined || value === "" || (Array.isArray(value) && !value.length)) continue;
+    if (key === "abilities") url.searchParams.set(key, (value as PlayerAbilityFilter[]).map(row => `${row.label}:${row.min ?? ""}:${row.max ?? ""}`).join(","));
+    else url.searchParams.set(key, Array.isArray(value) ? value.join(",") : String(value));
+  }
+}
+
+export async function searchPlayers(filters: PlayerSearchFilters): Promise<PlayerCard[]> {
   const url = new URL("/v1/players/search", API);
-  url.searchParams.set("q", query.trim());
-  url.searchParams.set("limit", "40");
+  appendPlayerFilters(url, { limit: 40, ...filters });
   const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as ErrorBody;
@@ -58,6 +69,13 @@ export async function searchPlayers(query: string): Promise<PlayerCard[]> {
   }
   const body = await response.json() as { players: PlayerCard[] };
   return body.players;
+}
+
+export async function fetchPlayerFilters(): Promise<PlayerFilterMetadata> {
+  const response = await fetch(new URL("/v1/players/filters", API).toString(), { headers: { Accept: "application/json" } });
+  const body = await response.json().catch(() => ({})) as PlayerFilterMetadata & ErrorBody;
+  if (!response.ok) throw new Error(body.error?.message ?? "검색 조건을 불러오지 못했습니다.");
+  return body;
 }
 
 export async function fetchPlayerDetail(spId: number, grade: number, options: PlayerDetailOptions = {}): Promise<PlayerDetail> {

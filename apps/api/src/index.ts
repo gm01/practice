@@ -4,6 +4,18 @@ const API = "https://open.api.nexon.com/fconline/v1";
 const META = "https://open.api.nexon.com/static/fconline/meta";
 const DATA_CENTER = "https://fconline.nexon.com";
 const MAX_MATCHES = 20;
+const SEARCH_POSITIONS: Record<string, number[]> = {
+  GK: [0], SW: [1], RWB: [2], RB: [3], CB: [4, 5, 6], LB: [7], LWB: [8],
+  CDM: [9, 10, 11], RM: [12], CM: [13, 14, 15], LM: [16], CAM: [17, 18, 19],
+  CF: [20, 21, 22], RW: [23], ST: [24, 25, 26], LW: [27],
+};
+const SEARCH_ABILITIES = [
+  "속력", "가속력", "골 결정력", "슛 파워", "중거리 슛", "위치 선정", "발리슛", "페널티 킥",
+  "짧은 패스", "시야", "크로스", "긴 패스", "프리킥", "커브", "드리블", "볼 컨트롤",
+  "민첩성", "밸런스", "반응 속도", "대인 수비", "태클", "가로채기", "헤더", "슬라이딩 태클",
+  "몸싸움", "스태미너", "적극성", "점프", "침착성", "GK 다이빙", "GK 핸들링", "GK 킥",
+  "GK 반응속도", "GK 위치 선정",
+];
 
 interface Env {
   NEXON_API_KEY: string;
@@ -261,14 +273,85 @@ async function dashboard(url: URL, env: Env) {
   };
 }
 
+function listParam(url: URL, name: string) {
+  return (url.searchParams.get(name) ?? "").split(",").map(value => value.trim()).filter(Boolean);
+}
+
+function numberParam(url: URL, name: string, minimum = 0, maximum = 999) {
+  const raw = url.searchParams.get(name);
+  if (raw === null || raw === "") return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.min(Math.max(value, minimum), maximum) : undefined;
+}
+
+function numericText(value: string) {
+  return Number(value.match(/[\d.]+/)?.[0] ?? 0);
+}
+
+function positionCodes(values: string[]) {
+  return [...new Set(values.flatMap(value => SEARCH_POSITIONS[value.toUpperCase()] ?? []))];
+}
+
+async function dataCenterPlayerIds(query: string, seasons: number[], positions: string[], salaryMin?: number, salaryMax?: number, overallMin?: number, overallMax?: number) {
+  const form = new URLSearchParams({
+    strPlayerName: query,
+    strSeason: seasons.length ? `,${seasons.join(",")},` : "",
+    strPosition: positionCodes(positions).length ? `,${positionCodes(positions).join(",")},` : "",
+    n4SalaryMin: String(salaryMin ?? 0), n4SalaryMax: String(salaryMax ?? 99),
+    n4OvrMin: String(overallMin ?? 0), n4OvrMax: String(overallMax ?? 250),
+  });
+  const html = await dataCenterFetch("/datacenter/PlayerList", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
+    body: form.toString(),
+  });
+  const ids = [...html.matchAll(/(?:spid|spId|\.val)\s*(?:\(|=|:)\s*["']?(\d{8,10})/gi)].map(match => Number(match[1]));
+  return [...new Set(ids)].slice(0, 100);
+}
+
+function playerFilterMetadata(meta: Metadata) {
+  return {
+    seasons: [...meta.seasons.entries()].map(([id, name]) => ({ id, name, imageUrl: meta.seasonImages.get(id) ?? "" })).sort((a, b) => b.id - a.id),
+    positions: Object.keys(SEARCH_POSITIONS),
+    abilities: SEARCH_ABILITIES,
+    bodyTypes: ["마름", "보통", "건장"],
+  };
+}
+
 async function searchPlayers(url: URL) {
-  const query = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("ko-KR");
-  const seasonId = Number(url.searchParams.get("seasonId") ?? 0);
+  const rawQuery = (url.searchParams.get("q") ?? "").trim();
+  const query = rawQuery.toLocaleLowerCase("ko-KR");
+  const seasons = listParam(url, "seasonIds").map(Number).filter(Number.isInteger);
+  const positions = listParam(url, "positions").filter(value => value.toUpperCase() in SEARCH_POSITIONS);
+  const grade = numberParam(url, "grade", 1, 13) ?? 1;
+  const overallMin = numberParam(url, "overallMin", 0, 250), overallMax = numberParam(url, "overallMax", 0, 250);
+  const salaryMin = numberParam(url, "salaryMin", 0, 99), salaryMax = numberParam(url, "salaryMax", 0, 99);
+  const heightMin = numberParam(url, "heightMin", 100, 250), heightMax = numberParam(url, "heightMax", 100, 250);
+  const weightMin = numberParam(url, "weightMin", 30, 200), weightMax = numberParam(url, "weightMax", 30, 200);
+  const weakFootMin = numberParam(url, "weakFootMin", 1, 5), weakFootMax = numberParam(url, "weakFootMax", 1, 5);
+  const skillMovesMin = numberParam(url, "skillMovesMin", 1, 6), skillMovesMax = numberParam(url, "skillMovesMax", 1, 6);
+  const bodyTypes = listParam(url, "bodyTypes"), preferredFoot = url.searchParams.get("preferredFoot") ?? "";
+  const nation = (url.searchParams.get("nation") ?? "").trim().toLocaleLowerCase("ko-KR");
+  const includeTraits = listParam(url, "includeTraits").map(value => value.toLocaleLowerCase("ko-KR"));
+  const excludeTraits = listParam(url, "excludeTraits").map(value => value.toLocaleLowerCase("ko-KR"));
+  const abilityFilters = listParam(url, "abilities").map(value => {
+    const [label, min, max] = value.split(":");
+    return { label, min: Number(min) || undefined, max: Number(max) || undefined };
+  }).filter(row => SEARCH_ABILITIES.includes(row.label));
+  const sort = url.searchParams.get("sort") ?? "overall-desc";
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 30), 1), 40);
-  if (!query || query.length > 40) throw new ApiError(400, "검색할 선수명을 입력해 주세요.", "INVALID_PLAYER_QUERY");
+  const hasCondition = seasons.length || positions.length || [overallMin, overallMax, salaryMin, salaryMax, heightMin, heightMax, weightMin, weightMax, weakFootMin, weakFootMax, skillMovesMin, skillMovesMax].some(value => value !== undefined) || bodyTypes.length || preferredFoot || nation || includeTraits.length || excludeTraits.length || abilityFilters.length;
+  if ((!query && !hasCondition) || rawQuery.length > 40) throw new ApiError(400, "선수명 또는 검색 조건을 입력해 주세요.", "INVALID_PLAYER_QUERY");
   const meta = await loadMetadata();
+  let candidateIds: number[] = [];
+  try {
+    candidateIds = await dataCenterPlayerIds(rawQuery, seasons, positions, salaryMin, salaryMax, overallMin, overallMax);
+  } catch {
+    candidateIds = [];
+  }
+  const candidateSet = new Set(candidateIds);
   const baseRows = [...meta.players.entries()]
-    .filter(([spId, name]) => (!seasonId || Math.floor(spId / 1_000_000) === seasonId) && name.toLocaleLowerCase("ko-KR").includes(query))
+    .filter(([spId, name]) => (candidateSet.size ? candidateSet.has(spId) : Boolean(query) && name.toLocaleLowerCase("ko-KR").includes(query)) && (!seasons.length || seasons.includes(Math.floor(spId / 1_000_000))))
     .map(([spId, name]) => {
       const cardSeasonId = Math.floor(spId / 1_000_000);
       const pid = String(spId % 1_000_000);
@@ -285,19 +368,37 @@ async function searchPlayers(url: URL) {
         seasonImageUrl: meta.seasonImages.get(cardSeasonId) ?? "",
       };
     })
-    .sort((a, b) => Number(b.name === query) - Number(a.name === query) || Number(b.name.startsWith(query)) - Number(a.name.startsWith(query)) || b.seasonId - a.seasonId)
-    .slice(0, limit);
+    .sort((a, b) => Number(b.name.toLocaleLowerCase("ko-KR") === query) - Number(a.name.toLocaleLowerCase("ko-KR") === query) || Number(b.name.toLocaleLowerCase("ko-KR").startsWith(query)) - Number(a.name.toLocaleLowerCase("ko-KR").startsWith(query)) || b.seasonId - a.seasonId)
+    .slice(0, 100);
   const rows: Array<(typeof baseRows)[number] & Awaited<ReturnType<typeof playerSearchFacts>>> = [];
   for (let index = 0; index < baseRows.length; index += 8) {
     const batch = baseRows.slice(index, index + 8);
-    const facts = await Promise.allSettled(batch.map(card => playerSearchFacts(card.spId)));
+    const facts = await Promise.allSettled(batch.map(card => playerSearchFacts(card.spId, grade)));
     batch.forEach((card, batchIndex) => rows.push({
       ...card,
-      ...(facts[batchIndex]?.status === "fulfilled" ? facts[batchIndex].value : emptyPlayerSearchFacts()),
+      ...(facts[batchIndex]?.status === "fulfilled" ? facts[batchIndex].value : emptyPlayerSearchFacts(grade)),
     }));
   }
-  rows.sort((a, b) => b.overall - a.overall || b.seasonId - a.seasonId || a.name.localeCompare(b.name, "ko-KR"));
-  return { query: url.searchParams.get("q")?.trim(), count: rows.length, players: rows, source: "NEXON Open API metadata" };
+  const filtered = rows.filter(row => {
+    const traits = row.traits.map(value => value.toLocaleLowerCase("ko-KR"));
+    const abilityMap = new Map(row.abilities.map(item => [item.label, item.value]));
+    return (!positions.length || positions.some(value => value === row.primaryPosition || (SEARCH_POSITIONS[value] ?? []).some(code => meta.positions.get(code) === row.primaryPosition)))
+      && (overallMin === undefined || row.overall >= overallMin) && (overallMax === undefined || row.overall <= overallMax)
+      && (salaryMin === undefined || row.salary >= salaryMin) && (salaryMax === undefined || row.salary <= salaryMax)
+      && (heightMin === undefined || numericText(row.height) >= heightMin) && (heightMax === undefined || numericText(row.height) <= heightMax)
+      && (weightMin === undefined || numericText(row.weight) >= weightMin) && (weightMax === undefined || numericText(row.weight) <= weightMax)
+      && (!bodyTypes.length || bodyTypes.some(value => row.bodyType.includes(value)))
+      && (!preferredFoot || row.preferredFoot === preferredFoot)
+      && (weakFootMin === undefined || row.weakFoot >= weakFootMin) && (weakFootMax === undefined || row.weakFoot <= weakFootMax)
+      && (skillMovesMin === undefined || row.skillMoves >= skillMovesMin) && (skillMovesMax === undefined || row.skillMoves <= skillMovesMax)
+      && (!nation || row.nation.toLocaleLowerCase("ko-KR").includes(nation))
+      && includeTraits.every(value => traits.some(trait => trait.includes(value)))
+      && excludeTraits.every(value => traits.every(trait => !trait.includes(value)))
+      && abilityFilters.every(filter => { const value = abilityMap.get(filter.label) ?? 0; return (filter.min === undefined || value >= filter.min) && (filter.max === undefined || value <= filter.max); });
+  });
+  filtered.sort((a, b) => sort === "overall-asc" ? a.overall - b.overall : sort === "salary-desc" ? b.salary - a.salary : sort === "salary-asc" ? a.salary - b.salary : sort === "name-asc" ? a.name.localeCompare(b.name, "ko-KR") : b.overall - a.overall || b.seasonId - a.seasonId || a.name.localeCompare(b.name, "ko-KR"));
+  const players = filtered.slice(0, limit);
+  return { query: rawQuery, count: players.length, players, source: "NEXON Open API metadata / EA SPORTS FC ONLINE Data Center" };
 }
 
 function decodeHtml(value: string) {
@@ -335,13 +436,13 @@ async function dataCenterFetch(path: string, init?: RequestInit) {
   return response.text();
 }
 
-function emptyPlayerSearchFacts() {
-  return { overall: 0, primaryPosition: "-", salary: 0, height: "", weight: "", bodyType: "", leftFoot: 0, rightFoot: 0, weakFoot: 0, preferredFoot: "-" };
+function emptyPlayerSearchFacts(grade = 1) {
+  return { grade, overall: 0, primaryPosition: "-", salary: 0, height: "", weight: "", bodyType: "", leftFoot: 0, rightFoot: 0, weakFoot: 0, preferredFoot: "-", skillMoves: 0, nation: "", traits: [] as string[], abilities: [] as Array<{ label: string; value: number }> };
 }
 
-async function playerSearchFacts(spId: number) {
+async function playerSearchFacts(spId: number, grade = 1) {
   const form = new URLSearchParams({
-    spid: String(spId), n1Strong: "1", n1Grow: "0", n4TeamColorId: "0", n4TeamColorLv: "0",
+    spid: String(spId), n1Strong: String(grade), n1Grow: "0", n4TeamColorId: "0", n4TeamColorLv: "0",
     n4TeamColorId_Enhance: "0", n4TeamColorLv_Enhance: "0", n4TeamColorId_Feature: "0", n1Change: "0", strPlayerImg: "",
   });
   const html = await dataCenterFetch("/datacenter/PlayerAbility", {
@@ -353,6 +454,7 @@ async function playerSearchFacts(spId: number) {
   const leftFoot = Number(/L\s*(\d+)/i.exec(foot)?.[1] ?? 0);
   const rightFoot = Number(/R\s*(\d+)/i.exec(foot)?.[1] ?? 0);
   return {
+    grade,
     overall: Number(firstMatch(html, /<div class="ovr value">\s*(\d+)/i, "0")),
     primaryPosition: firstMatch(html, /<div class="position">([\s\S]*?)<\/div>/i, "-"),
     salary: Number(firstMatch(html, /<div class="pay">[\s\S]*?<span>\s*(\d+)/i, "0")),
@@ -363,6 +465,10 @@ async function playerSearchFacts(spId: number) {
     rightFoot,
     weakFoot: Math.min(leftFoot, rightFoot),
     preferredFoot: leftFoot === rightFoot ? "양발" : leftFoot > rightFoot ? "왼발" : "오른발",
+    skillMoves: (/<span class="etc skill">\s*<span>([^<]*)<\/span>/i.exec(html)?.[1].match(/★/g) ?? []).length,
+    nation: firstMatch(html, /<div class="etc nation">[\s\S]*?<span class="txt">([\s\S]*?)<\/span>/i),
+    traits: parseTraits(html),
+    abilities: parseAbilities(html),
   };
 }
 
@@ -414,7 +520,7 @@ function parseTeamColorLinks(scope: string, idIndex: number, levelIndex?: number
   return rows.filter((row, index) => rows.findIndex(candidate => candidate.id === row.id && candidate.level === row.level) === index);
 }
 
-function parseTeamColorOptions(html: string) {
+function parseTeamColorOptions(html: string, seasonName = "") {
   const start = html.indexOf('<div class="teamcolor_selector_wrap">');
   const end = html.indexOf('<div class="ovr_set">', start);
   const scope = start >= 0 ? html.slice(start, end > start ? end : undefined) : "";
@@ -425,7 +531,7 @@ function parseTeamColorOptions(html: string) {
   const featureScope = featureStart >= 0 ? scope.slice(featureStart) : "";
   return {
     enhancement: parseTeamColorLinks(enhancementScope, 5, 6),
-    affiliation: parseTeamColorLinks(affiliationScope, 3, 4).map(option => ({ ...option, level: affiliationTeamColorLevel(option.id) })),
+    affiliation: parseTeamColorLinks(affiliationScope, 3, 4).map(option => ({ ...option, level: affiliationTeamColorLevel(option.id, seasonName, option.name) })),
     feature: parseTeamColorLinks(featureScope, 7),
   };
 }
@@ -465,23 +571,27 @@ async function playerDetail(url: URL) {
   const grade = Number(url.searchParams.get("grade") ?? 1);
   const grow = url.searchParams.get("adaptation") === "5" ? 4 : 0;
   const affiliationId = Number(url.searchParams.get("affiliationId") ?? 0);
-  const affiliationLevel = affiliationTeamColorLevel(affiliationId);
   const enhancementId = Number(url.searchParams.get("enhancementId") ?? 0);
   const enhancementLevel = Number(url.searchParams.get("enhancementLevel") ?? 0);
   const featureId = Number(url.searchParams.get("featureId") ?? 0);
   if (!Number.isInteger(spId) || spId < 1) throw new ApiError(400, "선수 식별자가 올바르지 않습니다.", "INVALID_SPID");
   if (!Number.isInteger(grade) || grade < 0 || grade > 13) throw new ApiError(400, "강화 단계는 0~13 사이여야 합니다.", "INVALID_GRADE");
-  if ([affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId].some(value => !Number.isInteger(value) || value < 0)) throw new ApiError(400, "팀컬러 선택값이 올바르지 않습니다.", "INVALID_TEAM_COLOR");
+  if ([affiliationId, enhancementId, enhancementLevel, featureId].some(value => !Number.isInteger(value) || value < 0)) throw new ApiError(400, "팀컬러 선택값이 올바르지 않습니다.", "INVALID_TEAM_COLOR");
 
   const detailPath = `/DataCenter/PlayerInfo?spid=${spId}&n1Strong=${grade}`;
   const baseForm = buildPlayerAbilityForm({ spId, grade });
-  const appliedForm = buildPlayerAbilityForm({ spId, grade, grow, affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId });
   const post = (body: string) => ({ method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: `${DATA_CENTER}${detailPath}` }, body }) satisfies RequestInit;
   const hasModifiers = grow > 0 || affiliationId > 0 || enhancementId > 0 || featureId > 0;
   const [pageHtml, baseAbilityHtml, priceHtml, meta] = await Promise.all([
     dataCenterFetch(detailPath), dataCenterFetch("/datacenter/PlayerAbility", post(baseForm.toString())),
     dataCenterFetch("/datacenter/PlayerPriceGraph", post(new URLSearchParams({ spid: String(spId), n1strong: String(grade) }).toString())), loadMetadata(),
   ]);
+  const seasonId = Math.floor(spId / 1_000_000);
+  const seasonName = meta.seasons.get(seasonId) ?? "시즌 정보 없음";
+  const teamColorOptions = parseTeamColorOptions(baseAbilityHtml, seasonName);
+  const selectedAffiliation = teamColorOptions.affiliation.find(option => option.id === affiliationId);
+  const affiliationLevel = affiliationTeamColorLevel(affiliationId, seasonName, selectedAffiliation?.name ?? "");
+  const appliedForm = buildPlayerAbilityForm({ spId, grade, grow, affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId });
   const abilityHtml = hasModifiers ? await dataCenterFetch("/datacenter/PlayerAbility", post(appliedForm.toString())) : baseAbilityHtml;
   const basePositions = parsePositions(baseAbilityHtml);
   const positions = parsePositions(abilityHtml).map(row => ({ ...row, baseValue: basePositions.find(base => base.position === row.position)?.value ?? row.value, delta: row.value - (basePositions.find(base => base.position === row.position)?.value ?? row.value) }));
@@ -489,7 +599,6 @@ async function playerDetail(url: URL) {
   const abilities = parseAbilities(abilityHtml).map(row => ({ ...row, baseValue: baseAbilities.find(base => base.label === row.label)?.value ?? row.value, delta: row.value - (baseAbilities.find(base => base.label === row.label)?.value ?? row.value) }));
   const baseSummary = parseSummaryAbilities(baseAbilityHtml);
   const summaryAbilities = parseSummaryAbilities(abilityHtml).map(row => ({ ...row, baseValue: baseSummary.find(base => base.label === row.label)?.value ?? row.value, delta: row.value - (baseSummary.find(base => base.label === row.label)?.value ?? row.value) }));
-  const seasonId = Math.floor(spId / 1_000_000);
   const pid = spId % 1_000_000;
   const foot = /<span class="etc foot">([\s\S]*?)<\/span>/i.exec(abilityHtml)?.[1] ?? "";
   const leftFoot = Number(/L\s*(\d+)/i.exec(decodeHtml(foot))?.[1] ?? 0);
@@ -499,7 +608,7 @@ async function playerDetail(url: URL) {
   const overall = Number(firstMatch(abilityHtml, /<div class="ovr value">\s*(\d+)/i, "0"));
   const baseOverall = Number(firstMatch(baseAbilityHtml, /<div class="ovr value">\s*(\d+)/i, "0"));
   return {
-    spId, grade, name, seasonId, seasonName: meta.seasons.get(seasonId) ?? "시즌 정보 없음",
+    spId, grade, name, seasonId, seasonName,
     overall, baseOverall, overallDelta: overall - baseOverall,
     primaryPosition: firstMatch(abilityHtml, /<div class="position">([\s\S]*?)<\/div>/i, positions[0]?.position ?? "-"),
     salary: Number(firstMatch(abilityHtml, /<div class="pay">[\s\S]*?<span>\s*(\d+)/i, "0")),
@@ -508,7 +617,7 @@ async function playerDetail(url: URL) {
     skillMoves: (/<span class="etc skill">\s*<span>([^<]*)<\/span>/i.exec(abilityHtml)?.[1].match(/★/g) ?? []).length,
     leftFoot, rightFoot,
     nation: firstMatch(abilityHtml, /<div class="etc nation">[\s\S]*?<span class="txt">([\s\S]*?)<\/span>/i),
-    traits: parseTraits(abilityHtml), positions, summaryAbilities, abilities, teamColorOptions: parseTeamColorOptions(baseAbilityHtml),
+    traits: parseTraits(abilityHtml), positions, summaryAbilities, abilities, teamColorOptions,
     selection: { adaptation: grow ? 5 : 1, affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId },
     clubCareer: parseClubCareer(pageHtml), rankerStats: parseRankerStats(pageHtml),
     rankerUpdatedAt: firstMatch(pageHtml, /업데이트 일시\s*:\s*([\d-]+)/i), currentPrice: price.current, priceHistory: price.history,
@@ -534,8 +643,9 @@ export default {
       }
       const isDashboard = url.pathname === "/v1/dashboard";
       const isPlayerSearch = url.pathname === "/v1/players/search";
+      const isPlayerFilters = url.pathname === "/v1/players/filters";
       const isPlayerDetail = url.pathname === "/v1/players/detail";
-      if (!isDashboard && !isPlayerSearch && !isPlayerDetail) throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND");
+      if (!isDashboard && !isPlayerSearch && !isPlayerFilters && !isPlayerDetail) throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND");
       checkRateLimit(request);
 
       const cache = await caches.open("fc-online-lab-api");
@@ -545,7 +655,7 @@ export default {
       const cached = await cache.match(cacheKey);
       if (cached) return new Response(cached.body, { status: cached.status, headers: { ...Object.fromEntries(cached.headers), ...corsHeaders(request, env), "X-Cache": "HIT" } });
 
-      const result = isPlayerSearch ? await searchPlayers(url) : isPlayerDetail ? await playerDetail(url) : await dashboard(url, env);
+      const result = isPlayerSearch ? await searchPlayers(url) : isPlayerFilters ? playerFilterMetadata(await loadMetadata()) : isPlayerDetail ? await playerDetail(url) : await dashboard(url, env);
       const ttl = Math.min(Math.max(Number(env.CACHE_TTL_SECONDS) || 90, 30), 300);
       const response = json(request, env, result, 200, { "Cache-Control": `public, max-age=${ttl}`, "X-Cache": "MISS" });
       ctx.waitUntil(cache.put(cacheKey, response.clone()));

@@ -10,9 +10,21 @@ export type PlayerAbilityFormInput = {
 };
 
 export const AFFILIATION_TEAM_COLOR_LEVEL = 4;
+export const SEASON_CLASS_TEAM_COLOR_LEVEL = 3;
 
-export function affiliationTeamColorLevel(affiliationId: number) {
-  return affiliationId > 0 ? AFFILIATION_TEAM_COLOR_LEVEL : 0;
+function normalizedTeamColorName(value: string) {
+  return value.toLocaleLowerCase("en-US").replace(/[^a-z0-9가-힣]/g, "");
+}
+
+export function isSeasonClassTeamColor(seasonName: string, teamColorName: string) {
+  const season = normalizedTeamColorName(seasonName);
+  const teamColor = normalizedTeamColorName(teamColorName);
+  return Boolean(teamColor && season.includes(teamColor));
+}
+
+export function affiliationTeamColorLevel(affiliationId: number, seasonName = "", teamColorName = "") {
+  if (affiliationId <= 0) return 0;
+  return isSeasonClassTeamColor(seasonName, teamColorName) ? SEASON_CLASS_TEAM_COLOR_LEVEL : AFFILIATION_TEAM_COLOR_LEVEL;
 }
 
 export function buildPlayerAbilityForm(input: PlayerAbilityFormInput) {

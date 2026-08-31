@@ -26,7 +26,10 @@ type MatchSummary = {
 type UserProfile = {
   ouid: string; nickname: string; level: number; divisionName: string; divisionDate: string | null;
 };
-type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; overall: number; primaryPosition: string; salary: number; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string };
+type PlayerCard = { spId: number; name: string; seasonId: number; seasonName: string; imageUrls: string[]; seasonImageUrl: string; grade: number; overall: number; primaryPosition: string; salary: number; height: string; weight: string; bodyType: string; leftFoot: number; rightFoot: number; weakFoot: number; preferredFoot: string; skillMoves: number; nation: string; traits: string[]; abilities: Array<{ label: string; value: number }> };
+type PlayerAbilityFilter = { label: string; min?: number; max?: number };
+type PlayerSearchFilters = { query: string; seasonIds?: number[]; positions?: string[]; grade?: number; overallMin?: number; overallMax?: number; salaryMin?: number; salaryMax?: number; heightMin?: number; heightMax?: number; weightMin?: number; weightMax?: number; bodyTypes?: string[]; preferredFoot?: string; weakFootMin?: number; weakFootMax?: number; skillMovesMin?: number; skillMovesMax?: number; nation?: string; includeTraits?: string[]; excludeTraits?: string[]; abilities?: PlayerAbilityFilter[]; sort?: string; limit?: number };
+type PlayerFilterMetadata = { seasons: Array<{ id: number; name: string; imageUrl: string }>; positions: string[]; abilities: string[]; bodyTypes: string[] };
 type PlayerDetail = {
   spId: number; grade: number; name: string; seasonId: number; seasonName: string; overall: number; baseOverall: number; overallDelta: number; primaryPosition: string; salary: number;
   birthDate: string; height: string; weight: string; bodyType: string; playerClass: string; skillMoves: number; leftFoot: number; rightFoot: number;
@@ -44,7 +47,8 @@ interface Window {
     fetchDashboard(input: { apiKey?: string; nickname: string; offset: number; matchType: number }): Promise<{ profile: UserProfile | null; matches: MatchSummary[]; failures: Array<{ matchId: string; message: string }>; matchTypes: Array<{ id: number; name: string }> }>;
     fetchTrades(input: { apiKey: string }): Promise<{ trades: TradeRecord[] } | TradeRecord[]>;
     fetchRankerStats(input: { apiKey: string; players: Array<{ id: number; po: number }> }): Promise<RankerRecord[]>;
-    searchPlayers(query: string): Promise<PlayerCard[]>;
+    searchPlayers(filters: PlayerSearchFilters): Promise<PlayerCard[]>;
+    fetchPlayerFilters(): Promise<PlayerFilterMetadata>;
     fetchPlayerDetail(spId: number, grade: number, options?: PlayerDetailOptions): Promise<PlayerDetail>;
     loadSettings(): Promise<{ nickname: string }>;
     saveSettings(nickname: string): Promise<void>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { affiliationTeamColorLevel, buildPlayerAbilityForm } from "./playerAbility";
+import { affiliationTeamColorLevel, buildPlayerAbilityForm, isSeasonClassTeamColor } from "./playerAbility";
 
 describe("buildPlayerAbilityForm", () => {
   it("applies the selected affiliation level without a global stat-change flag", () => {
@@ -18,6 +18,12 @@ describe("buildPlayerAbilityForm", () => {
   it("uses affiliation team colors at stage 4", () => {
     expect(affiliationTeamColorLevel(321)).toBe(4);
     expect(affiliationTeamColorLevel(0)).toBe(0);
+  });
+
+  it("uses season class team colors at stage 3", () => {
+    expect(isSeasonClassTeamColor("GRU (Greatest Runner-Ups)", "Greatest Runner-Ups")).toBe(true);
+    expect(affiliationTeamColorLevel(40587, "GRU (Greatest Runner-Ups)", "Greatest Runner-Ups")).toBe(3);
+    expect(affiliationTeamColorLevel(2007, "GRU (Greatest Runner-Ups)", "포르투갈")).toBe(4);
   });
 
   it("does not activate any team-color parameter for the base ability request", () => {
