@@ -13,8 +13,9 @@ if (pendingChanges.length) {
   process.exit(1);
 }
 
-const deployment = spawnSync("npm", ["--prefix", "apps/api", "run", "deploy:worker"], {
-  cwd: root,
+const wranglerEntry = resolve(root, "apps/api/node_modules/wrangler/bin/wrangler.js");
+const deployment = spawnSync(process.execPath, [wranglerEntry, "deploy"], {
+  cwd: resolve(root, "apps/api"),
   encoding: "utf8",
   stdio: ["inherit", "pipe", "pipe"],
 });

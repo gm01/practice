@@ -3,13 +3,13 @@
 > 저장소: `https://github.com/gm01/practice.git`
 
 <!-- AUTO_STATUS_START -->
-- 마지막 자동 동기화: `2026-09-01 01:28:54 KST`
-- 동기화 이벤트: `커밋`
+- 마지막 자동 동기화: `2026-09-01 07:40:08 KST`
+- 동기화 이벤트: `API 배포`
 - 작업 브랜치: `codex/fconline-dashboard-improvements`
 - 문서 기준: 이 파일이 포함된 최신 Git 커밋 (정확한 해시는 `git log -1 -- PROJECT_STATUS.md`로 확인)
 - 운영 API: `https://fc-online-lab-api.bebebe97.workers.dev`
-- 마지막 API 배포 버전: `c7179396-186f-4935-b706-4db8ca931850`
-- 마지막 API 배포 시각: `2026-08-31 16:36:54 KST`
+- 마지막 API 배포 버전: `87caa12a-ec2e-4e3f-afe6-0d6ec87dc799`
+- 마지막 API 배포 시각: `2026-09-01 07:40:08 KST`
 <!-- AUTO_STATUS_END -->
 
 이 문서는 다른 컴퓨터, 다른 개발자 또는 다른 AI 개발 환경에서 FC Online Lab 개발을 바로 이어가기 위한 현재 상태 요약이다. 코드와 Git 커밋에 남지 않는 의사결정, 외부 서비스 설정, 실행 방법과 알려진 제약을 함께 기록한다.
@@ -321,6 +321,7 @@ npm run typecheck
 - 전체 Vitest 56개 테스트 통과
 - Wrangler 배포 dry-run에서 Rate Limiting 2개, Analytics Engine, Version Metadata binding과 Worker 번들 검증 통과
 - 로컬 Worker `/health` 200 및 진단 헤더, CORS preflight 204, 오류 수집 202, 잘못된 오류 payload 400 확인
+- 운영 Worker `87caa12a-ec2e-4e3f-afe6-0d6ec87dc799`에서 `/health` 200, 선수 필터 200, 오류 수집 202, Nexon Secret 경로 및 오류 원천 분류 확인
 
 ## 9. 외부 환경에만 존재하는 정보
 
