@@ -3,13 +3,13 @@
 > 저장소: `https://github.com/gm01/practice.git`
 
 <!-- AUTO_STATUS_START -->
-- 마지막 자동 동기화: `2026-08-31 12:49:52 KST`
-- 동기화 이벤트: `커밋`
+- 마지막 자동 동기화: `2026-08-31 12:50:30 KST`
+- 동기화 이벤트: `API 배포`
 - 작업 브랜치: `codex/fconline-dashboard-improvements`
 - 문서 기준: 이 파일이 포함된 최신 Git 커밋 (정확한 해시는 `git log -1 -- PROJECT_STATUS.md`로 확인)
 - 운영 API: `https://fc-online-lab-api.bebebe97.workers.dev`
-- 마지막 API 배포 버전: `75fb7129-cb4a-4dfe-8fe6-e2b8b7baa307`
-- 마지막 API 배포 시각: `2026-08-31 11:37:12 KST`
+- 마지막 API 배포 버전: `b395625b-e6ce-4898-956b-44324356795c`
+- 마지막 API 배포 시각: `2026-08-31 12:50:30 KST`
 <!-- AUTO_STATUS_END -->
 
 이 문서는 다른 컴퓨터, 다른 개발자 또는 다른 AI 개발 환경에서 FC Online Lab 개발을 바로 이어가기 위한 현재 상태 요약이다. 코드와 Git 커밋에 남지 않는 의사결정, 외부 서비스 설정, 실행 방법과 알려진 제약을 함께 기록한다.
