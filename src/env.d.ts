@@ -34,10 +34,10 @@ type PlayerDetail = {
   abilities: Array<{ label: string; value: number; baseValue: number; delta: number }>; clubCareer: Array<{ years: string; club: string; loan: string }>;
   rankerStats: Record<string, string>; rankerUpdatedAt: string; currentPrice: number; priceHistory: Array<{ date: string; value: number }>;
   teamColorOptions: { enhancement: Array<{ id: number; level: number; name: string }>; affiliation: Array<{ id: number; level: number; name: string }>; feature: Array<{ id: number; level: number; name: string }> };
-  selection: { adaptation: 1 | 5; affiliationId: number; enhancementId: number; enhancementLevel: number; featureId: number };
+  selection: { adaptation: 1 | 5; affiliationId: number; affiliationLevel: number; enhancementId: number; enhancementLevel: number; featureId: number };
   imageUrls: string[]; sourceUrl: string; source: string;
 };
-type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
+type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; affiliationLevel?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
 
 interface Window {
   fcOnline: {

@@ -10,10 +10,10 @@ export type PlayerDetail = {
   abilities: Array<{ label: string; value: number; baseValue: number; delta: number }>; clubCareer: Array<{ years: string; club: string; loan: string }>;
   rankerStats: Record<string, string>; rankerUpdatedAt: string; currentPrice: number; priceHistory: Array<{ date: string; value: number }>;
   teamColorOptions: { enhancement: Array<{ id: number; level: number; name: string }>; affiliation: Array<{ id: number; level: number; name: string }>; feature: Array<{ id: number; level: number; name: string }> };
-  selection: { adaptation: 1 | 5; affiliationId: number; enhancementId: number; enhancementLevel: number; featureId: number };
+  selection: { adaptation: 1 | 5; affiliationId: number; affiliationLevel: number; enhancementId: number; enhancementLevel: number; featureId: number };
   imageUrls: string[]; sourceUrl: string; source: string;
 };
-export type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
+export type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; affiliationLevel?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
 
 type ErrorBody = { error?: { code?: string; message?: string } };
 
@@ -66,6 +66,7 @@ export async function fetchPlayerDetail(spId: number, grade: number, options: Pl
   url.searchParams.set("grade", String(grade));
   if (options.adaptation) url.searchParams.set("adaptation", String(options.adaptation));
   if (options.affiliationId) url.searchParams.set("affiliationId", String(options.affiliationId));
+  if (options.affiliationLevel) url.searchParams.set("affiliationLevel", String(options.affiliationLevel));
   if (options.enhancementId) url.searchParams.set("enhancementId", String(options.enhancementId));
   if (options.enhancementLevel) url.searchParams.set("enhancementLevel", String(options.enhancementLevel));
   if (options.featureId) url.searchParams.set("featureId", String(options.featureId));

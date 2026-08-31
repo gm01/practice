@@ -1,3 +1,5 @@
+import { buildPlayerAbilityForm } from "./playerAbility";
+
 const API = "https://open.api.nexon.com/fconline/v1";
 const META = "https://open.api.nexon.com/static/fconline/meta";
 const DATA_CENTER = "https://fconline.nexon.com";
@@ -463,22 +465,17 @@ async function playerDetail(url: URL) {
   const grade = Number(url.searchParams.get("grade") ?? 1);
   const grow = url.searchParams.get("adaptation") === "5" ? 4 : 0;
   const affiliationId = Number(url.searchParams.get("affiliationId") ?? 0);
+  const affiliationLevel = Number(url.searchParams.get("affiliationLevel") ?? (affiliationId > 0 ? 1 : 0));
   const enhancementId = Number(url.searchParams.get("enhancementId") ?? 0);
   const enhancementLevel = Number(url.searchParams.get("enhancementLevel") ?? 0);
   const featureId = Number(url.searchParams.get("featureId") ?? 0);
   if (!Number.isInteger(spId) || spId < 1) throw new ApiError(400, "선수 식별자가 올바르지 않습니다.", "INVALID_SPID");
   if (!Number.isInteger(grade) || grade < 0 || grade > 13) throw new ApiError(400, "강화 단계는 0~13 사이여야 합니다.", "INVALID_GRADE");
-  if ([affiliationId, enhancementId, enhancementLevel, featureId].some(value => !Number.isInteger(value) || value < 0)) throw new ApiError(400, "팀컬러 선택값이 올바르지 않습니다.", "INVALID_TEAM_COLOR");
+  if ([affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId].some(value => !Number.isInteger(value) || value < 0)) throw new ApiError(400, "팀컬러 선택값이 올바르지 않습니다.", "INVALID_TEAM_COLOR");
 
   const detailPath = `/DataCenter/PlayerInfo?spid=${spId}&n1Strong=${grade}`;
-  const baseForm = new URLSearchParams({
-    spid: String(spId), n1Strong: String(grade), n1Grow: "0", n4TeamColorId: "0", n4TeamColorLv: "0",
-    n4TeamColorId_Enhance: "0", n4TeamColorLv_Enhance: "0", n4TeamColorId_Feature: "0", n1Change: "0", strPlayerImg: "",
-  });
-  const appliedForm = new URLSearchParams({
-    spid: String(spId), n1Strong: String(grade), n1Grow: String(grow), n4TeamColorId: String(affiliationId), n4TeamColorLv: "1",
-    n4TeamColorId_Enhance: String(enhancementId), n4TeamColorLv_Enhance: String(enhancementLevel), n4TeamColorId_Feature: String(featureId), n1Change: affiliationId > 0 ? "1" : "0", strPlayerImg: "",
-  });
+  const baseForm = buildPlayerAbilityForm({ spId, grade });
+  const appliedForm = buildPlayerAbilityForm({ spId, grade, grow, affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId });
   const post = (body: string) => ({ method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: `${DATA_CENTER}${detailPath}` }, body }) satisfies RequestInit;
   const hasModifiers = grow > 0 || affiliationId > 0 || enhancementId > 0 || featureId > 0;
   const [pageHtml, baseAbilityHtml, priceHtml, meta] = await Promise.all([
@@ -512,7 +509,7 @@ async function playerDetail(url: URL) {
     leftFoot, rightFoot,
     nation: firstMatch(abilityHtml, /<div class="etc nation">[\s\S]*?<span class="txt">([\s\S]*?)<\/span>/i),
     traits: parseTraits(abilityHtml), positions, summaryAbilities, abilities, teamColorOptions: parseTeamColorOptions(baseAbilityHtml),
-    selection: { adaptation: grow ? 5 : 1, affiliationId, enhancementId, enhancementLevel, featureId },
+    selection: { adaptation: grow ? 5 : 1, affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId },
     clubCareer: parseClubCareer(pageHtml), rankerStats: parseRankerStats(pageHtml),
     rankerUpdatedAt: firstMatch(pageHtml, /업데이트 일시\s*:\s*([\d-]+)/i), currentPrice: price.current, priceHistory: price.history,
     imageUrls: [

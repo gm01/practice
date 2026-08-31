@@ -402,7 +402,7 @@ async function fetchServicePlayers(query: string) {
   return body.players ?? [];
 }
 
-type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
+type PlayerDetailOptions = { adaptation?: 1 | 5; affiliationId?: number; affiliationLevel?: number; enhancementId?: number; enhancementLevel?: number; featureId?: number };
 
 async function fetchServicePlayerDetail(spId: number, grade: number, options: PlayerDetailOptions = {}) {
   const url = new URL("/v1/players/detail", SERVICE_API);
