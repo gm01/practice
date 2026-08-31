@@ -315,6 +315,7 @@ export const s = StyleSheet.create({
   dbAbilityBoosted: { borderColor: "#315d4755", backgroundColor: "#0a1510" },
   dbTrainingHeading: { flexDirection: "row", gap: 8, alignItems: "center", marginTop: 22, marginBottom: 10 },
   dbTrainingCount: { color: C.green, fontSize: 11, fontWeight: "900" },
+  dbTrainingActions: { gap: 5 },
   dbTrainingReset: { paddingHorizontal: 8, paddingVertical: 6, borderWidth: 1, borderColor: C.line, borderRadius: 5, backgroundColor: C.panel },
   dbTrainingResetText: { color: C.text, fontSize: 8, fontWeight: "800" },
   dbTrainingValue: { alignItems: "flex-end", gap: 5 },
