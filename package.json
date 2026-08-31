@@ -8,6 +8,9 @@
   "license": "UNLICENSED",
   "main": "out/main/main.js",
   "scripts": {
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "status:sync": "node scripts/update-project-status.mjs --event manual",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
@@ -22,7 +25,7 @@
     "mobile:ios": "npm --prefix apps/mobile run ios",
     "mobile:typecheck": "npm --prefix apps/mobile run typecheck",
     "api:dev": "npm --prefix apps/api run dev",
-    "api:deploy": "npm --prefix apps/api run deploy",
+    "api:deploy": "node scripts/deploy-api.mjs",
     "api:typecheck": "npm --prefix apps/api run typecheck"
   },
   "build": {

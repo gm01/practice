@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "node ../../scripts/deploy-api.mjs",
+    "deploy:worker": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -2,6 +2,8 @@
 
 FC Online 경기 기록, 득점 흐름, 슈팅 위치, 선수 평점과 랭커 기록을 확인하는 Electron 데스크톱 앱입니다.
 
+다른 환경에서 개발을 이어갈 때는 [PROJECT_STATUS.md](PROJECT_STATUS.md)의 현재 구조, 배포 상태와 인수인계 항목을 먼저 확인하세요.
+
 Data based on NEXON Open API
 
 ## 주요 기능
