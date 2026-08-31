@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPlayerAbilityForm } from "./playerAbility";
+import { affiliationTeamColorLevel, buildPlayerAbilityForm } from "./playerAbility";
 
 describe("buildPlayerAbilityForm", () => {
   it("applies the selected affiliation level without a global stat-change flag", () => {
@@ -13,6 +13,11 @@ describe("buildPlayerAbilityForm", () => {
     expect(form.get("n4TeamColorId")).toBe("321");
     expect(form.get("n4TeamColorLv")).toBe("4");
     expect(form.get("n1Change")).toBe("0");
+  });
+
+  it("uses affiliation team colors at stage 4", () => {
+    expect(affiliationTeamColorLevel(321)).toBe(4);
+    expect(affiliationTeamColorLevel(0)).toBe(0);
   });
 
   it("does not activate any team-color parameter for the base ability request", () => {

@@ -9,6 +9,12 @@ export type PlayerAbilityFormInput = {
   featureId?: number;
 };
 
+export const AFFILIATION_TEAM_COLOR_LEVEL = 4;
+
+export function affiliationTeamColorLevel(affiliationId: number) {
+  return affiliationId > 0 ? AFFILIATION_TEAM_COLOR_LEVEL : 0;
+}
+
 export function buildPlayerAbilityForm(input: PlayerAbilityFormInput) {
   return new URLSearchParams({
     spid: String(input.spId),

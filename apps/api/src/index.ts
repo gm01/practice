@@ -1,4 +1,4 @@
-import { buildPlayerAbilityForm } from "./playerAbility";
+import { affiliationTeamColorLevel, buildPlayerAbilityForm } from "./playerAbility";
 
 const API = "https://open.api.nexon.com/fconline/v1";
 const META = "https://open.api.nexon.com/static/fconline/meta";
@@ -425,7 +425,7 @@ function parseTeamColorOptions(html: string) {
   const featureScope = featureStart >= 0 ? scope.slice(featureStart) : "";
   return {
     enhancement: parseTeamColorLinks(enhancementScope, 5, 6),
-    affiliation: parseTeamColorLinks(affiliationScope, 3, 4),
+    affiliation: parseTeamColorLinks(affiliationScope, 3, 4).map(option => ({ ...option, level: affiliationTeamColorLevel(option.id) })),
     feature: parseTeamColorLinks(featureScope, 7),
   };
 }
@@ -465,7 +465,7 @@ async function playerDetail(url: URL) {
   const grade = Number(url.searchParams.get("grade") ?? 1);
   const grow = url.searchParams.get("adaptation") === "5" ? 4 : 0;
   const affiliationId = Number(url.searchParams.get("affiliationId") ?? 0);
-  const affiliationLevel = Number(url.searchParams.get("affiliationLevel") ?? (affiliationId > 0 ? 1 : 0));
+  const affiliationLevel = affiliationTeamColorLevel(affiliationId);
   const enhancementId = Number(url.searchParams.get("enhancementId") ?? 0);
   const enhancementLevel = Number(url.searchParams.get("enhancementLevel") ?? 0);
   const featureId = Number(url.searchParams.get("featureId") ?? 0);
