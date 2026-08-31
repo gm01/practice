@@ -1,9 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { ClientErrorEvent } from "../../../shared/contracts";
+import { enqueueBounded } from "../../../shared/clientTelemetry";
 
 export type SearchItem = { nickname: string; searchedAt: string; favorite: boolean };
 
 const SEARCHES = "fconline.searches.v1";
 const PLAYER_FAVORITES = "fconline.player-favorites.v1";
+const CLIENT_ERRORS = "fconline.client-errors.v1";
 
 export async function loadSearches(): Promise<SearchItem[]> {
   try {
@@ -44,4 +47,16 @@ export async function togglePlayerFavorite(spId: number): Promise<number[]> {
   const next = current.includes(spId) ? current.filter(id => id !== spId) : [spId, ...current];
   await AsyncStorage.setItem(PLAYER_FAVORITES, JSON.stringify(next));
   return next;
+}
+
+export async function loadClientErrors(): Promise<ClientErrorEvent[]> {
+  try { return JSON.parse(await AsyncStorage.getItem(CLIENT_ERRORS) ?? "[]") as ClientErrorEvent[]; } catch { return []; }
+}
+
+export async function queueClientError(event: ClientErrorEvent) {
+  await AsyncStorage.setItem(CLIENT_ERRORS, JSON.stringify(enqueueBounded(await loadClientErrors(), event)));
+}
+
+export async function saveClientErrors(events: ClientErrorEvent[]) {
+  await AsyncStorage.setItem(CLIENT_ERRORS, JSON.stringify(events.slice(-20)));
 }

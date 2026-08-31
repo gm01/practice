@@ -1,6 +1,6 @@
 # FC Online Lab
 
-FC Online 경기 기록, 득점 흐름, 슈팅 위치, 선수 평점과 랭커 기록을 확인하는 Electron 데스크톱 앱입니다.
+FC Online 경기 기록, 득점 흐름, 슈팅 위치, 선수 평점과 선수 정보를 확인하는 Electron 데스크톱 앱입니다.
 
 다른 환경에서 개발을 이어갈 때는 [PROJECT_STATUS.md](PROJECT_STATUS.md)의 현재 구조, 배포 상태와 인수인계 항목을 먼저 확인하세요.
 
@@ -10,11 +10,10 @@ Data based on NEXON Open API
 
 - 구단주명 기반 최근 경기 조회
 - 경기 요약, 득점·도움 타임라인, 통계, 라인업, 슈팅 맵
-- TOP 10,000 랭커 선수 평균 비교
-- API 키 계정의 최근 거래 기록
+- EA SPORTS FC ONLINE 데이터센터 기반 선수 검색·상세 정보
 - 최고 평점 선수를 활용한 대표 이미지
-
-거래 API는 OUID를 지원하지 않으므로 임의 구단주의 거래 기록은 조회할 수 없습니다.
+- 요청 취소·timeout·429·재시도와 파서 부분 실패 안내
+- 익명 request ID 기반 클라이언트/서버 오류 연결 및 버전 표시
 
 ## 개발 실행
 
@@ -54,6 +53,8 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+운영 지표, 오류 원인 분류, 개인정보 제외 기준과 CORS 정책은 [OBSERVABILITY.md](OBSERVABILITY.md)를 확인하세요.
 
 ## 설치 파일 생성
 

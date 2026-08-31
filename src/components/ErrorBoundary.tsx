@@ -1,4 +1,5 @@
 import { Component, ErrorInfo, ReactNode } from "react";
+import { reportDesktopError } from "../telemetry";
 
 type Props = { children: ReactNode };
 type State = { failed: boolean };
@@ -12,6 +13,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("Renderer error", error, info.componentStack);
+    void reportDesktopError(new Error(`${error.message}\n${info.componentStack ?? ""}`), "REACT_RENDER_ERROR");
   }
 
   render(): ReactNode {

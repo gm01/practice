@@ -3,8 +3,8 @@
 > 저장소: `https://github.com/gm01/practice.git`
 
 <!-- AUTO_STATUS_START -->
-- 마지막 자동 동기화: `2026-08-31 16:36:54 KST`
-- 동기화 이벤트: `API 배포`
+- 마지막 자동 동기화: `2026-09-01 01:28:54 KST`
+- 동기화 이벤트: `커밋`
 - 작업 브랜치: `codex/fconline-dashboard-improvements`
 - 문서 기준: 이 파일이 포함된 최신 Git 커밋 (정확한 해시는 `git log -1 -- PROJECT_STATUS.md`로 확인)
 - 운영 API: `https://fc-online-lab-api.bebebe97.workers.dev`
@@ -40,8 +40,7 @@ FC04/
 │   │   ├── AnalysisReport.tsx
 │   │   ├── PlayerDatabase.tsx
 │   │   ├── PlayerDetail.tsx
-│   │   ├── PlayerPhoto.tsx
-│   │   └── FeatureViews.tsx
+│   │   └── PlayerPhoto.tsx
 │   └── styles.css
 ├── electron/               Electron main/preload
 ├── apps/
@@ -53,7 +52,15 @@ FC04/
 │   │       ├── styles.ts
 │   │       └── types.ts
 │   └── api/                Cloudflare Workers API
-│       ├── src/index.ts
+│       ├── src/
+│       │   ├── index.ts
+│       │   ├── dataCenterParser.ts
+│       │   ├── observability.ts
+│       │   ├── clientTelemetry.ts
+│       │   ├── cors.ts
+│       │   ├── playerFactCache.ts
+│       │   ├── playerSearchPolicy.ts
+│       │   └── runtimeProtection.ts
 │       └── wrangler.jsonc
 ├── shared/                 데스크톱 공통 NEXON 변환 로직과 테스트
 ├── PRIVACY.md
@@ -136,7 +143,17 @@ FC04/
 - NEXON API 키는 클라이언트에 포함하지 않음
 - Cloudflare Workers Secret으로 `NEXON_API_KEY` 관리
 - 운영 앱은 Cloudflare Worker를 통해 NEXON API 호출
+- 전체 API 요청 분당 60회, 외부 호출이 큰 경로는 IP·경로별 분당 20회로 Cloudflare Rate Limiting binding 적용
+- 선수 검색 후보를 요청 결과 수에 따라 최대 60장으로 제한하고, 카드·강화 단계별 데이터센터 결과를 24시간 캐시
+- 같은 Worker 인스턴스에서 동시에 들어온 동일 선수 카드 요청은 하나의 데이터센터 호출로 병합
+- 구단주별 조회가 불가능한 거래 화면과 클라이언트 API 키 기반 독립 랭커 경로 제거
 - 개인정보처리방침과 문의 이메일 등록
+- 데스크톱·모바일·Worker 공통 계약, 포메이션, 선수 비교, 네트워크 오류 처리를 `shared/`로 분리
+- Electron 서비스 API와 IPC 입력 검증, Worker 데이터센터 파서·관측·CORS 모듈 분리
+- timeout·offline·429·재시도·취소·stale 응답 방지 공통 처리
+- 파서 필수 필드 누락 감지, 부분 실패 안내, fixture 회귀 테스트
+- 익명 request ID로 클라이언트 오류와 Worker/upstream/parser 로그 연결
+- 앱/API/Worker 버전 표시 및 경로별 응답시간·오류율 Analytics Engine 기록
 
 ## 4. 중요한 화면 이동 규칙
 
@@ -160,6 +177,7 @@ Cloudflare Worker는 다음 경로를 제공한다.
 | `GET /v1/dashboard` | 구단주 프로필·최근 경기 | `nickname`, `matchtype`, `offset`, `limit` |
 | `GET /v1/players/search` | 선수 시즌 카드 검색 | `q`, `seasonId`, `limit` |
 | `GET /v1/players/detail` | 선수 상세·팀컬러 적용 | `spid`, `grade`, `adaptation`, 팀컬러 ID |
+| `POST /v1/telemetry/client-error` | 익명 클라이언트 오류 수집 | JSON 오류 이벤트 |
 
 모바일 기본 API 주소는 `apps/mobile/src/api.ts`에 운영 Worker 주소로 설정되어 있다. 필요하면 `EXPO_PUBLIC_API_BASE_URL` 환경변수로 변경할 수 있다.
 
@@ -294,13 +312,15 @@ cd apps/api
 npm run typecheck
 ```
 
-2026-08-28 기준 결과:
+2026-09-01 기준 결과:
 
 - 데스크톱 TypeScript 검사 통과
 - Electron 프로덕션 빌드 통과
 - 모바일 TypeScript 검사 통과
 - API TypeScript 검사 통과
-- `shared/nexon.test.ts` 7개 테스트 통과
+- 전체 Vitest 56개 테스트 통과
+- Wrangler 배포 dry-run에서 Rate Limiting 2개, Analytics Engine, Version Metadata binding과 Worker 번들 검증 통과
+- 로컬 Worker `/health` 200 및 진단 헤더, CORS preflight 204, 오류 수집 202, 잘못된 오류 payload 400 확인
 
 ## 9. 외부 환경에만 존재하는 정보
 
@@ -322,7 +342,7 @@ npm run typecheck
 - Open API 거래내역 API는 OUID 파라미터를 지원하지 않아 임의 구단주의 개인 거래내역 조회 용도로 사용할 수 없음
 - Open API가 자책골의 시간·선수 정보를 제공하지 않는 경우 정확한 타임라인 복원이 불가능함
 - 선발·교체 투입 시점을 별도로 제공하지 않아 포지션 코드 기반 참고 정보만 제공
-- Cloudflare의 `ALLOWED_ORIGINS`가 현재 `*`이므로 공개 웹 배포 전 허용 Origin 제한 검토 필요
+- Cloudflare의 `ALLOWED_ORIGINS=*`는 공개 네이티브 API 정책이다. 웹 배포 시 정확한 Origin allowlist로 전환해야 함
 - 코드 서명과 스토어 심사 준비가 완료되지 않음
 - 실사용자·기록 없는 계정·긴 닉네임·작은 화면 회귀 테스트가 더 필요함
 
@@ -330,9 +350,9 @@ npm run typecheck
 
 1. iOS·Android 실제 단말에서 선수 비교와 플레이어 리포트 탐색 회귀 테스트
 2. 선수 비교 화면의 작은 화면·긴 선수명 레이아웃 검증
-3. 포메이션 계산과 PLAYER REPORT 탐색에 자동 테스트 추가
-4. 데이터센터 파서 실패 시 사용자 안내와 모니터링 강화
-5. Cloudflare 허용 Origin과 요청 제한 정책 운영값 확정
+3. 실제 운영 트래픽에서 경로별 p95·오류율 경보 임계치 확정
+4. 데이터센터 HTML 변경 시 fixture를 갱신하는 운영 절차 점검
+5. 웹 클라이언트 공개 시 Cloudflare 허용 Origin 운영값 확정
 6. 앱 아이콘·스토어 설명·스크린샷 최종 제작
 7. iOS TestFlight 및 Android 내부 테스트 트랙 구성
 8. `RELEASE_CHECKLIST.md`의 미완료 항목 처리

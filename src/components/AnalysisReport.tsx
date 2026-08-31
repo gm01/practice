@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import PlayerPhoto from "./PlayerPhoto";
+import { formationName } from "../../shared/formation";
 
 type ReportTab = "overview" | "players" | "shots" | "tactics";
 
@@ -12,17 +13,6 @@ function timeIndex(minute: number): number {
   if (minute <= 15) return 0; if (minute <= 30) return 1; if (minute <= 45) return 2;
   if (minute <= 60) return 3; if (minute <= 75) return 4; if (minute <= 90) return 5; return 6;
 }
-function formationOf(players: PlayerSummary[]): string {
-  const starters = players.filter(player => player.rating > 0 && player.positionCode < 28);
-  const lines = [
-    starters.filter(player => player.positionCode >= 1 && player.positionCode <= 8).length,
-    starters.filter(player => player.positionCode >= 9 && player.positionCode <= 11).length,
-    starters.filter(player => player.positionCode >= 12 && player.positionCode <= 16).length,
-    starters.filter(player => player.positionCode >= 17 && player.positionCode <= 19).length,
-    starters.filter(player => player.positionCode >= 20 && player.positionCode <= 27).length,
-  ].filter(Boolean);
-  return lines.length >= 2 ? lines.join("-") : "기타";
-}
 function shotQuality(shot: ShotSummary): number {
   if (shot.type === 9) return 0.76;
   let quality = 0.05;
@@ -33,7 +23,7 @@ function shotQuality(shot: ShotSummary): number {
   return Math.max(0.03, Math.min(0.65, quality));
 }
 
-export default function AnalysisReport({ matches, rankers, onSelectPlayer }: { matches: MatchSummary[]; rankers: RankerRecord[]; onSelectPlayer: (spId: number) => void }) {
+export default function AnalysisReport({ matches, onSelectPlayer }: { matches: MatchSummary[]; onSelectPlayer: (spId: number) => void }) {
   const [tab, setTab] = useState<ReportTab>("overview");
   const [shotPlayer, setShotPlayer] = useState("전체");
   const [range, setRange] = useState<5 | 10 | 20>(20);
@@ -75,7 +65,7 @@ export default function AnalysisReport({ matches, rankers, onSelectPlayer }: { m
       const rows = allShots.filter(shot => shot.type === type); return { type, count:rows.length, goals:rows.filter(shot => shot.isGoal).length };
     }).sort((a,b) => b.count-a.count);
     const formations = new Map<string, { games:number; wins:number; goals:number; conceded:number }>();
-    sample.forEach(match => { const formation=formationOf(match.players); const row=formations.get(formation)??{games:0,wins:0,goals:0,conceded:0}; row.games++; row.wins+=match.result==="승"?1:0; row.goals+=match.myScore; row.conceded+=match.opponentScore; formations.set(formation,row); });
+    sample.forEach(match => { const formation=formationName(match.players); const row=formations.get(formation)??{games:0,wins:0,goals:0,conceded:0}; row.games++; row.wins+=match.result==="승"?1:0; row.goals+=match.myScore; row.conceded+=match.opponentScore; formations.set(formation,row); });
     const styles = { possession:0, counter:0, balanced:0 };
     sample.forEach(match => { const possession=match.stats.possession??50; if(possession>=55)styles.possession++;else if(possession<=45)styles.counter++;else styles.balanced++; });
     const lateConceded = timeline[5].opponent + timeline[6].opponent;
@@ -107,7 +97,7 @@ export default function AnalysisReport({ matches, rankers, onSelectPlayer }: { m
       <div className="timeline-analysis"><h3>득점·실점 시간대</h3><div className="timeline-bars">{analysis.timeline.map((row,index)=><div key={timeLabels[index]}><b>{timeLabels[index]}</b><span><i className="for" style={{height:`${Math.max(3,row.mine/maxTimeline*100)}%`}} title={`득점 ${row.mine}`}/><i className="against" style={{height:`${Math.max(3,row.opponent/maxTimeline*100)}%`}} title={`실점 ${row.opponent}`}/></span><small>{row.mine} : {row.opponent}</small></div>)}</div><p className="analysis-insight">↗ {analysis.insight}</p></div>
     </div>}
 
-    {tab === "players" && <div className="report-panel"><div className="player-report-head"><h3>선수 누적 리포트</h3><span>선수 카드를 선택하면 플레이어 리포트로 이동합니다.</span></div><div className="player-report-list">{analysis.players.slice(0,18).map(row=>{const ranker=rankers.find(item=>item.spid===row.player.spId);const mainPosition=[...row.positions.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]??row.player.position;return <article className="clickable" onClick={()=>onSelectPlayer(row.player.spId)} key={row.player.spId}><PlayerPhoto player={row.player} compact showSeason/><div className="player-report-name"><b>{row.player.name}</b><span>{mainPosition} · {row.games}경기</span></div><div><small>평균/범위</small><b>{average(row.ratings).toFixed(2)}</b><span>{Math.min(...row.ratings).toFixed(1)}~{Math.max(...row.ratings).toFixed(1)}</span></div><div><small>골·도움</small><b>{row.goals} · {row.assists}</b><span>경기당 {((row.goals+row.assists)/row.games).toFixed(2)}P</span></div><div><small>슈팅</small><b>{row.shots}</b><span>유효 {percent(row.effectiveShots,row.shots)}%</span></div><div><small>패스</small><b>{percent(row.passSuccess,row.passTry)}%</b><span>{row.passSuccess}/{row.passTry}</span></div><div className="rating-flow"><small>최근 흐름</small><span>{row.ratings.slice(0,5).map((rating,index)=><i style={{height:`${Math.max(12,rating/10*100)}%`}} title={rating.toFixed(1)} key={index}/>)}</span></div><div><small>랭커 비교</small><b>{ranker?`${(row.goals/row.games-ranker.status.goal)>=0?"+":""}${(row.goals/row.games-ranker.status.goal).toFixed(2)}`:"–"}</b><span>{ranker?"경기당 골 차이":"랭커 탭 조회 필요"}</span></div></article>})}</div></div>}
+    {tab === "players" && <div className="report-panel"><div className="player-report-head"><h3>선수 누적 리포트</h3><span>선수 카드를 선택하면 플레이어 리포트로 이동합니다.</span></div><div className="player-report-list">{analysis.players.slice(0,18).map(row=>{const mainPosition=[...row.positions.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]??row.player.position;return <article className="clickable" onClick={()=>onSelectPlayer(row.player.spId)} key={row.player.spId}><PlayerPhoto player={row.player} compact showSeason/><div className="player-report-name"><b>{row.player.name}</b><span>{mainPosition} · {row.games}경기</span></div><div><small>평균/범위</small><b>{average(row.ratings).toFixed(2)}</b><span>{Math.min(...row.ratings).toFixed(1)}~{Math.max(...row.ratings).toFixed(1)}</span></div><div><small>골·도움</small><b>{row.goals} · {row.assists}</b><span>경기당 {((row.goals+row.assists)/row.games).toFixed(2)}P</span></div><div><small>슈팅</small><b>{row.shots}</b><span>유효 {percent(row.effectiveShots,row.shots)}%</span></div><div><small>패스</small><b>{percent(row.passSuccess,row.passTry)}%</b><span>{row.passSuccess}/{row.passTry}</span></div><div className="rating-flow"><small>최근 흐름</small><span>{row.ratings.slice(0,5).map((rating,index)=><i style={{height:`${Math.max(12,rating/10*100)}%`}} title={rating.toFixed(1)} key={index}/>)}</span></div></article>})}</div></div>}
 
     {tab === "shots" && <div className="report-panel"><div className="shot-report-grid"><div><div className="subheading"><h3>슈팅 히트맵</h3><select value={shotPlayer} onChange={event=>setShotPlayer(event.target.value)}><option>전체</option>{[...new Set(analysis.allShots.map(shot=>shot.playerName))].sort().map(name=><option key={name}>{name}</option>)}</select></div><div className="analysis-pitch"><div className="analysis-box"/><div className="analysis-goal"/>{filteredShots.map((shot,index)=><i className={shot.isGoal?"goal":""} style={{left:`${shot.x*100}%`,top:`${shot.y*100}%`,opacity:shot.isGoal?1:.38}} title={`${shot.minute}' ${shot.playerName}`} key={index}/>)}</div></div><div className="shot-breakdown"><h3>슈팅 분석</h3><div className="mini-kpis"><span><small>박스 안</small><b>{percent(filteredShots.filter(shot=>shot.inPenalty).length,filteredShots.length)}%</b></span><span><small>평균 품질</small><b>{Math.round(average(filteredShots.map(shotQuality))*100)}%</b></span><span><small>득점 전환</small><b>{percent(filteredShots.filter(shot=>shot.isGoal).length,filteredShots.length)}%</b></span><span><small>상대 대비 슈팅</small><b>{analysis.allShots.length-analysis.allOpponentShots.length>=0?"+":""}{analysis.allShots.length-analysis.allOpponentShots.length}</b></span></div><h4>공격 방향</h4>{[["왼쪽",0,.33],["중앙",.33,.67],["오른쪽",.67,1]].map(([label,min,max])=>{const count=filteredShots.filter(shot=>shot.y>=Number(min)&&shot.y<Number(max)).length;return <div className="direction-row" key={String(label)}><span>{label}</span><i><b style={{width:`${percent(count,filteredShots.length)}%`}}/></i><strong>{percent(count,filteredShots.length)}%</strong></div>})}<h4>슛 종류별 성공률</h4>{analysis.shotTypes.slice(0,6).map(row=><div className="direction-row" key={row.type}><span>{shotTypeNames[row.type]??`유형 ${row.type}`}</span><i><b style={{width:`${percent(row.goals,row.count)}%`}}/></i><strong>{row.goals}/{row.count}</strong></div>)}</div></div><p className="quality-note">예상 득점 확률은 슈팅 위치·박스 안팎·슛 종류를 이용한 자체 참고 지표이며 공식 xG가 아닙니다.</p></div>}
 
@@ -116,6 +106,6 @@ export default function AnalysisReport({ matches, rankers, onSelectPlayer }: { m
 }
 
 function mostFormation(matches: MatchSummary[]): string {
-  const counts = new Map<string,number>(); matches.forEach(match=>{const value=formationOf(match.players);counts.set(value,(counts.get(value)??0)+1);});
+  const counts = new Map<string,number>(); matches.forEach(match=>{const value=formationName(match.players);counts.set(value,(counts.get(value)??0)+1);});
   return [...counts.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]??"기록 없음";
 }

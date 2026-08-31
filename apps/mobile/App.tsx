@@ -17,10 +17,15 @@ import {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as Sharing from "expo-sharing";
 import ViewShot, { type ViewShotRef } from "react-native-view-shot";
-import { fetchDashboard, fetchPlayerDetail, fetchPlayerFilters, searchPlayers, type PlayerCard, type PlayerDetail, type PlayerDetailOptions, type PlayerFilterMetadata, type PlayerSearchFilters } from "./src/api";
+import { fetchDashboard, fetchPlayerDetail, fetchPlayerFilters, searchPlayers, setDiagnosticListener, type PlayerCard, type PlayerDetail, type PlayerDetailOptions, type PlayerFilterMetadata, type PlayerSearchFilters } from "./src/api";
 import { C, s } from "./src/styles";
 import type { Dashboard, Match, Player, Side } from "./src/types";
 import { focusedTrainingOvr, orderedAbilityColumns, recommendedFocusedTraining } from "../../shared/playerOvr";
+import { POSITION_COORDINATES, formationName, startingPlayers, substitutePlayers } from "../../shared/formation";
+import { setComparisonGrade } from "../../shared/comparison";
+import type { DiagnosticInfo } from "../../shared/contracts";
+import { installMobileErrorHandler, reportMobileError, setRelatedRequestId } from "./src/telemetry";
+import { resolveBackAction } from "./src/navigation";
 import {
   loadSearches,
   loadPlayerFavorites,
@@ -30,37 +35,6 @@ import {
   togglePlayerFavorite,
   type SearchItem,
 } from "./src/storage";
-
-const positionCoordinates: Record<number, [number, number]> = {
-  0: [50, 90],
-  1: [50, 81],
-  2: [88, 75],
-  3: [82, 78],
-  4: [66, 77],
-  5: [50, 78],
-  6: [34, 77],
-  7: [18, 78],
-  8: [12, 70],
-  9: [65, 64],
-  10: [50, 65],
-  11: [35, 64],
-  12: [84, 54],
-  13: [66, 53],
-  14: [50, 54],
-  15: [34, 53],
-  16: [16, 54],
-  17: [68, 42],
-  18: [50, 43],
-  19: [32, 42],
-  20: [67, 28],
-  21: [50, 30],
-  22: [33, 28],
-  23: [84, 22],
-  24: [63, 17],
-  25: [50, 16],
-  26: [37, 17],
-  27: [16, 22],
-};
 
 const average = (v: number[]) =>
   v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
@@ -213,23 +187,16 @@ function Formation({
   players: Player[];
   onPlayer: (id: number) => void;
 }) {
-  const starters = players.filter((p) => p.rating > 0 && p.positionCode < 28);
-  const substitutes = players.filter((p) => p.rating > 0 && p.positionCode >= 28);
-  const lines = [
-    starters.filter((p) => p.positionCode >= 1 && p.positionCode <= 8).length,
-    starters.filter((p) => p.positionCode >= 9 && p.positionCode <= 11).length,
-    starters.filter((p) => p.positionCode >= 12 && p.positionCode <= 16).length,
-    starters.filter((p) => p.positionCode >= 17 && p.positionCode <= 19).length,
-    starters.filter((p) => p.positionCode >= 20 && p.positionCode <= 27).length,
-  ].filter(Boolean);
-  const formationName = lines.join("-") || "포메이션 정보 없음";
+  const starters = startingPlayers(players);
+  const substitutes = substitutePlayers(players);
+  const currentFormation = formationName(players);
   return (
     <>
-      <Text style={s.formationTitle}>포메이션 {formationName} · 선발 {starters.length}명</Text>
+      <Text style={s.formationTitle}>포메이션 {currentFormation} · 선발 {starters.length}명</Text>
       <View style={s.formationPitch}>
         <PitchLines />
         {starters.map((p) => {
-          const [x, y] = positionCoordinates[p.positionCode] ?? [50, 50];
+          const [x, y] = POSITION_COORDINATES[p.positionCode] ?? [50, 50];
           return (
             <Pressable
               style={[s.formationPlayer, { left: `${x}%`, top: `${y}%` }]}
@@ -812,11 +779,11 @@ function MobilePlayerComparison({ cards, onClose }: { cards: [PlayerCard,PlayerC
   const [grades,setGrades]=useState<[number,number]>([1,1]);
   const [details,setDetails]=useState<[PlayerDetail|null,PlayerDetail|null]>([null,null]);
   const [loading,setLoading]=useState(true),[error,setError]=useState("");
-  useEffect(()=>{let active=true;setLoading(true);setError("");Promise.all(cards.map((card,index)=>fetchPlayerDetail(card.spId,grades[index],{adaptation:1}))).then(values=>{if(active)setDetails(values as [PlayerDetail,PlayerDetail])}).catch(reason=>{if(active)setError(reason instanceof Error?reason.message:"선수 비교 정보를 불러오지 못했습니다.")}).finally(()=>{if(active)setLoading(false)});return()=>{active=false}},[cards,grades]);
+  useEffect(()=>{let active=true;const controller=new AbortController();setLoading(true);setError("");Promise.all(cards.map((card,index)=>fetchPlayerDetail(card.spId,grades[index],{adaptation:1},controller.signal))).then(values=>{if(active)setDetails(values as [PlayerDetail,PlayerDetail])}).catch(reason=>{if(active&&reason?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 비교 정보를 불러오지 못했습니다.")}).finally(()=>{if(active)setLoading(false)});return()=>{active=false;controller.abort()}},[cards,grades]);
   const [left,right]=details;
   const labels=left&&right?[...new Set([...left.abilities.map(row=>row.label),...right.abilities.map(row=>row.label)])]:[];
   const ability=(detail:PlayerDetail,label:string)=>detail.abilities.find(row=>row.label===label)?.value??0;
-  const changeGrade=(index:0|1,delta:number)=>setGrades(current=>{const next=Math.min(13,Math.max(1,current[index]+delta));return index===0?[next,current[1]]:[current[0],next]});
+  const changeGrade=(index:0|1,delta:number)=>setGrades(current=>setComparisonGrade(current,index,current[index]+delta));
   return <View style={s.comparePanel}><View style={s.compareHeading}><View><Text style={s.eyebrow}>PLAYER COMPARISON</Text><Text style={s.headingCompact}>선수 비교</Text></View><Pressable onPress={onClose} accessibilityLabel="선수 비교 닫기"><Text style={s.compareClose}>×</Text></Pressable></View><View style={s.compareHeroes}>{cards.map((card,index)=><View style={s.compareHero} key={card.spId}><CardImage card={card} size={72} seasonImageUrl={card.seasonImageUrl}/><Text style={s.playerName} numberOfLines={2}>{card.name}</Text><Text style={s.muted} numberOfLines={1}>{card.seasonName}</Text><Text style={s.dbMeta}>{card.primaryPosition} · 급여 {card.salary||"-"}</Text><FootRatings right={card.rightFoot} left={card.leftFoot}/><View style={s.compareGrade}><Pressable onPress={()=>changeGrade(index as 0|1,-1)}><Text style={s.compareGradeButton}>−</Text></Pressable><Text style={s.compareGradeValue}>{grades[index]}강</Text><Pressable onPress={()=>changeGrade(index as 0|1,1)}><Text style={s.compareGradeButton}>＋</Text></Pressable></View></View>)}</View>{loading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>두 선수의 능력치를 비교하는 중…</Text></View>}{!!error&&<Text style={s.error}>{error}</Text>}{left&&right&&<View style={s.compareTable}><View style={s.compareOverall}><Text style={[s.compareOverallValue,{color:statColor(left.overall)}]}>{left.overall}</Text><Text style={s.compareLabel}>OVR</Text><Text style={[s.compareOverallValue,{color:statColor(right.overall)}]}>{right.overall}</Text></View>{labels.map(label=>{const l=ability(left,label),r=ability(right,label);return <View style={s.compareRow} key={label}><View style={s.compareStat}><Text style={[s.compareStatValue,l>r&&s.compareWinner]}>{l}</Text><Text style={s.compareDelta}>{l===r?"–":l>r?`+${l-r}`:`-${r-l}`}</Text></View><Text style={s.compareLabel}>{label}</Text><View style={s.compareStat}><Text style={[s.compareStatValue,r>l&&s.compareWinner]}>{r}</Text><Text style={s.compareDelta}>{l===r?"–":r>l?`+${r-l}`:`-${l-r}`}</Text></View></View>})}</View>}</View>;
 }
 
@@ -853,12 +820,14 @@ function PlayerDatabase({ matches, onBack, onHeaderBackChange, initialQuery = ""
   const [detailOptions,setDetailOptions]=useState<PlayerDetailOptions>({adaptation:1}),[focusedTraining,setFocusedTraining]=useState<Record<string,number>>({});
   const [compare,setCompare]=useState<PlayerCard[]>([]);
   const [filters,setFilters]=useState<PlayerSearchFilters>({...MOBILE_DEFAULT_FILTERS}),[filterMeta,setFilterMeta]=useState<PlayerFilterMetadata|null>(null),[filtersOpen,setFiltersOpen]=useState(false);
+  const searchAbortRef=useRef<AbortController|null>(null);
   useEffect(()=>{void loadPlayerFavorites().then(setFavorites)},[]);
-  useEffect(()=>{if(!selected)return;let active=true;setDetailLoading(true);setError("");void fetchPlayerDetail(selected.spId,grade,detailOptions).then(value=>{if(active)setDetail(value)}).catch(reason=>{if(active)setError(reason instanceof Error?reason.message:"선수 상세 조회 실패")}).finally(()=>{if(active)setDetailLoading(false)});return()=>{active=false}},[selected,grade,detailOptions]);
+  useEffect(()=>{if(!selected)return;let active=true;const controller=new AbortController();setDetailLoading(true);setError("");void fetchPlayerDetail(selected.spId,grade,detailOptions,controller.signal).then(value=>{if(active)setDetail(value)}).catch(reason=>{if(active&&reason?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 상세 조회 실패")}).finally(()=>{if(active)setDetailLoading(false)});return()=>{active=false;controller.abort()}},[selected,grade,detailOptions]);
   const closeDetail=useCallback(()=>{setSelected(null);setDetail(null)},[]);
   useEffect(()=>{onHeaderBackChange(selected?closeDetail:onBack);return()=>onHeaderBackChange(null)},[selected,closeDetail,onBack,onHeaderBackChange]);
-  useEffect(()=>{void fetchPlayerFilters().then(setFilterMeta).catch(()=>undefined)},[]);
-  const runSearch=useCallback(async(value:string,current:PlayerSearchFilters)=>{const request={...current,query:value};if(!value.trim()&&!mobileHasFilters(request)){setError("선수명 또는 검색 조건을 입력해 주세요.");return}setLoading(true);setError("");try{setRows(await searchPlayers(request));setSelected(null);setFiltersOpen(false)}catch(reason){setError(reason instanceof Error?reason.message:"선수 검색 실패")}finally{setLoading(false)}},[]);
+  useEffect(()=>{const controller=new AbortController();void fetchPlayerFilters(controller.signal).then(setFilterMeta).catch(()=>undefined);return()=>controller.abort()},[]);
+  useEffect(()=>()=>searchAbortRef.current?.abort(),[]);
+  const runSearch=useCallback(async(value:string,current:PlayerSearchFilters)=>{const request={...current,query:value};if(!value.trim()&&!mobileHasFilters(request)){setError("선수명 또는 검색 조건을 입력해 주세요.");return}searchAbortRef.current?.abort();const controller=new AbortController();searchAbortRef.current=controller;setLoading(true);setError("");try{const result=await searchPlayers(request,controller.signal);if(searchAbortRef.current===controller){setRows(result);setSelected(null);setFiltersOpen(false)}}catch(reason){if(searchAbortRef.current===controller&&(reason as {kind?:string})?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 검색 실패")}finally{if(searchAbortRef.current===controller){searchAbortRef.current=null;setLoading(false)}}},[]);
   useEffect(()=>{if(initialQuery.trim()){setQuery(initialQuery);void runSearch(initialQuery,MOBILE_DEFAULT_FILTERS)}},[initialQuery,runSearch]);
   async function run(){await runSearch(query,filters)}
   function toggleCompare(card:PlayerCard){setCompare(current=>current.some(item=>item.spId===card.spId)?current.filter(item=>item.spId!==card.spId):current.length<2?[...current,card]:[current[1],card])}
@@ -872,7 +841,7 @@ function PlayerDatabase({ matches, onBack, onHeaderBackChange, initialQuery = ""
     const appearances=matches.flatMap(match=>{const player=match.players.find(p=>p.spId===selected.spId&&p.rating>0);return player?[{match,player}]:[]});
     return <ScrollView contentContainerStyle={s.content}><View style={s.dbHero}><CardImage card={detail??selected} size={118} seasonImageUrl={selected.seasonImageUrl}/><View style={s.flex}><Text style={s.eyebrow}>PLAYER INFORMATION</Text><Text style={s.playerHeroName}>{selected.name}</Text><Text style={s.muted}>{selected.seasonName}</Text>{detail&&<><View style={s.dbOverallRow}><Text style={[s.dbOverall,{color:statColor(focusedOverall)}]}>{detail.primaryPosition} {focusedOverall}</Text>{detail.overallDelta+focusedOverallDelta>0&&<Text style={s.dbDelta}>+{detail.overallDelta+focusedOverallDelta}</Text>}{focusedOverallDelta>0&&<Text style={s.dbEstimate}>예상</Text>}</View><Text style={s.muted}>{detail.nation} · 급여 {detail.salary}</Text></>}</View><Pressable onPress={()=>void togglePlayerFavorite(selected.spId).then(setFavorites)} accessibilityLabel="선수 즐겨찾기"><Text style={s.favorite}>{favorites.includes(selected.spId)?"★":"☆"}</Text></Pressable></View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.dbGradeRow}><Text style={s.dbGradeLabel}>강화</Text>{Array.from({length:13},(_,index)=>index+1).map(value=><Pressable key={value} style={[s.dbGrade,value===grade&&s.dbGradeActive]} onPress={()=>{setGrade(value);setDetailOptions({adaptation:1});setFocusedTraining({})}}><Text style={value===grade?s.dbGradeActiveText:s.muted}>+{value}</Text></Pressable>)}</ScrollView>
-      {detailLoading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>능력치와 시세를 불러오는 중…</Text></View>}{error&&<Text style={s.error}>{error}</Text>}
+      {detailLoading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>능력치와 시세를 불러오는 중…</Text></View>}{error&&<Text style={s.error}>{error}</Text>}{detail?.degraded&&<Text style={s.warning}>데이터센터 형식 변경으로 일부 선수 정보만 표시합니다. 누락 항목: {detail.missingFields?.join(", ")||"상세 정보"}</Text>}
       {detail&&<><View style={s.dbTeamColor}><Text style={s.eyebrow}>TEAM COLOR DATABASE</Text><Text style={s.headingCompact}>능력치 적용 설정</Text><Text style={s.muted}>적응도와 팀컬러를 선택하면 기본 능력치 대비 상승값을 계산합니다.</Text><View style={s.dbSelectorGroup}><Text style={s.dbSelectorLabel}>적응도</Text><View style={s.dbSelectorRow}>{([1,5] as const).map(value=><Pressable key={value} style={[s.dbChoice,detailOptions.adaptation===value&&s.dbChoiceActive]} onPress={()=>setDetailOptions(current=>({...current,adaptation:value}))}><Text style={detailOptions.adaptation===value?s.dbChoiceActiveText:s.muted}>적응도 {value}</Text></Pressable>)}</View></View><TeamColorChoices label="강화 팀컬러" value={detailOptions.enhancementId?`${detailOptions.enhancementId}:${detailOptions.enhancementLevel??1}`:"0"} options={detail.teamColorOptions.enhancement.map(option=>({value:`${option.id}:${option.level}`,name:option.name}))} onChange={value=>{const [id,level]=value.split(":").map(Number);setDetailOptions(current=>({...current,enhancementId:id||0,enhancementLevel:level||0}))}}/><TeamColorChoices label="소속 팀컬러" value={detailOptions.affiliationId?`${detailOptions.affiliationId}:${detailOptions.affiliationLevel??1}`:"0"} options={detail.teamColorOptions.affiliation.map(option=>({value:`${option.id}:${option.level}`,name:option.name}))} onChange={value=>{const [id,level]=value.split(":").map(Number);setDetailOptions(current=>({...current,affiliationId:id||0,affiliationLevel:level||0}))}}/><TeamColorChoices label="관계·특성 팀컬러" value={String(detailOptions.featureId??0)} options={detail.teamColorOptions.feature.map(option=>({value:String(option.id),name:option.name}))} onChange={value=>setDetailOptions(current=>({...current,featureId:Number(value)}))}/></View><View style={s.dbPills}>{[detail.birthDate,detail.height,detail.weight,detail.bodyType,`개인기 ${"★".repeat(detail.skillMoves)}`].filter(Boolean).map(value=><Text style={s.dbPill} key={value}>{value}</Text>)}<FootRatings right={detail.rightFoot} left={detail.leftFoot}/></View><View style={s.dbSummary}>{detail.summaryAbilities.map(row=><View style={s.dbSummaryCell} key={row.label}><Text style={s.muted}>{row.label}</Text><View style={s.dbValueRow}><Text style={[s.dbAbilityValue,{color:statColor(row.value)}]}>{row.value}</Text>{row.delta>0&&<Text style={s.dbDelta}>+{row.delta}</Text>}</View></View>)}</View>
         <Text style={s.heading}>시세</Text><View style={s.dbPanel}><Text style={s.dbPrice}>{detail.currentPrice?`${detail.currentPrice.toLocaleString("ko-KR")} BP`:"시세 정보 없음"}</Text><MobilePriceBars rows={detail.priceHistory}/></View>
         <Text style={s.heading}>특성</Text><View style={s.dbPills}>{detail.traits.map(value=><Text style={s.dbPill} key={value}>{value}</Text>)}</View>
@@ -895,7 +864,15 @@ export default function App() {
     [searches, setSearches] = useState<SearchItem[]>([]),
     [playerDb, setPlayerDb] = useState(false),
     [playerDbQuery,setPlayerDbQuery]=useState("");
+  const [diagnostics,setDiagnostics]=useState<DiagnosticInfo>({requestId:null,serverVersion:null,apiVersion:null});
   const [headerBack,setHeaderBack]=useState<(() => void)|null>(null);
+  const dashboardAbortRef=useRef<AbortController|null>(null);
+  useEffect(()=>()=>dashboardAbortRef.current?.abort(),[]);
+  useEffect(() => installMobileErrorHandler(), []);
+  useEffect(() => {
+    setDiagnosticListener(value => { setDiagnostics(value); setRelatedRequestId(value.requestId); });
+    return () => setDiagnosticListener(undefined);
+  }, []);
   useEffect(() => {
     void loadSearches().then(setSearches);
   }, []);
@@ -916,18 +893,22 @@ export default function App() {
       setError("구단주명을 입력해 주세요.");
       return;
     }
+    dashboardAbortRef.current?.abort();
+    const controller=new AbortController();
+    dashboardAbortRef.current=controller;
     setNickname(target);
     setLoading(true);
     setError("");
     try {
-      const next = await fetchDashboard(target);
-      setData(next);
-      setSearches(await rememberSearch(next.profile.nickname));
+      const next = await fetchDashboard(target,controller.signal);
+      if(dashboardAbortRef.current===controller){setData(next);setSearches(await rememberSearch(next.profile.nickname))}
     } catch (e) {
-      setError(e instanceof Error ? e.message : "전적 조회 실패");
+      if(dashboardAbortRef.current===controller&&(e as {kind?:string})?.kind!=="cancelled") {
+        setError(e instanceof Error ? e.message : "전적 조회 실패");
+        void reportMobileError(e, "DASHBOARD_REQUEST_ERROR", "dashboard");
+      }
     } finally {
-      setProgress(100);
-      setLoading(false);
+      if(dashboardAbortRef.current===controller){dashboardAbortRef.current=null;setProgress(100);setLoading(false)}
     }
   }
   async function favorite() {
@@ -955,10 +936,12 @@ export default function App() {
     setMatch(null);
   }
   function goBack() {
-    if (playerDb) return (headerBack??closePlayerInfo)();
-    if (player) return setPlayer(null);
-    if (match) setMatch(null);
-    else if (data) setData(null);
+    const action=resolveBackAction({playerDatabase:playerDb,hasNestedPlayerDatabaseBack:Boolean(headerBack),player:Boolean(player),match:Boolean(match),dashboard:Boolean(data)});
+    if(action==="nested-player-database") return headerBack?.();
+    if(action==="close-player-database") return closePlayerInfo();
+    if(action==="close-player") return setPlayer(null);
+    if(action==="close-match") return setMatch(null);
+    if(action==="close-dashboard") setData(null);
   }
   const canGoBack=Boolean(playerDb||player||match||data);
   return (
@@ -1126,6 +1109,7 @@ export default function App() {
           )}
         </KeyboardAvoidingView>
         <View style={s.footer}>
+          <Text style={s.muted}>앱 0.1.0 · API v{diagnostics.apiVersion??"-"} · 서버 {diagnostics.serverVersion?.slice(0,8)??"-"} · 요청 {diagnostics.requestId?.slice(0,8)??"-"}</Text>
           <Text style={s.muted}>Data based on NEXON Open API</Text>
         </View>
       </SafeAreaView>

@@ -1,4 +1,37 @@
 import { affiliationTeamColorLevel, buildPlayerAbilityForm } from "./playerAbility";
+import { ApiError } from "./errors";
+import {
+  classText,
+  decodeHtml,
+  firstMatch,
+  parseAbilities,
+  parseClubCareer,
+  parsePositions,
+  parsePrice,
+  parseRankerStats,
+  parseSummaryAbilities,
+  parseTeamColorOptions,
+  parseTraits,
+  validatePlayerAbilityHtml,
+} from "./dataCenterParser";
+import { loadCachedPlayerFacts } from "./playerFactCache";
+import {
+  playerSearchCandidateLimit,
+} from "./playerSearchPolicy";
+import { checkRateLimits, type RateLimiterBinding } from "./runtimeProtection";
+import { assertAllowedOrigin, corsHeaders } from "./cors";
+import { parseClientErrorPayload, recordClientError } from "./clientTelemetry";
+import {
+  API_VERSION,
+  APP_VERSION,
+  createRequestTrace,
+  diagnosticHeaders,
+  recordParser,
+  recordRequest,
+  recordUpstream,
+  type ObservabilityEnv,
+  type RequestTrace,
+} from "./observability";
 
 const API = "https://open.api.nexon.com/fconline/v1";
 const META = "https://open.api.nexon.com/static/fconline/meta";
@@ -17,10 +50,13 @@ const SEARCH_ABILITIES = [
   "GK 반응속도", "GK 위치 선정",
 ];
 
-interface Env {
+interface Env extends ObservabilityEnv {
   NEXON_API_KEY: string;
   ALLOWED_ORIGINS: string;
   CACHE_TTL_SECONDS: string;
+  API_ACCESS_POLICY: string;
+  API_RATE_LIMITER: RateLimiterBinding;
+  EXPENSIVE_RATE_LIMITER: RateLimiterBinding;
 }
 
 type Json = Record<string, unknown>;
@@ -32,27 +68,7 @@ type Metadata = {
   seasonImages: Map<number, string>;
 };
 
-class ApiError extends Error {
-  constructor(public status: number, message: string, public code = "API_ERROR") {
-    super(message);
-  }
-}
-
-const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 let metadataCache: Promise<Metadata> | null = null;
-
-function corsHeaders(request: Request, env: Env): HeadersInit {
-  const origin = request.headers.get("Origin");
-  const allowed = env.ALLOWED_ORIGINS.split(",").map(item => item.trim()).filter(Boolean);
-  const allowOrigin = allowed.includes("*") ? "*" : origin && allowed.includes(origin) ? origin : allowed[0] ?? "null";
-  return {
-    "Access-Control-Allow-Origin": allowOrigin,
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
-    "Access-Control-Max-Age": "86400",
-    "Vary": "Origin",
-  };
-}
 
 function json(request: Request, env: Env, body: unknown, status = 200, extra: HeadersInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -67,45 +83,41 @@ function json(request: Request, env: Env, body: unknown, status = 200, extra: He
   });
 }
 
-function checkRateLimit(request: Request) {
-  const now = Date.now();
-  const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-  const current = rateBuckets.get(ip);
-  if (!current || current.resetAt <= now) {
-    rateBuckets.set(ip, { count: 1, resetAt: now + 60_000 });
-    return;
-  }
-  current.count += 1;
-  if (current.count > 30) throw new ApiError(429, "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", "RATE_LIMITED");
-  if (rateBuckets.size > 5_000) {
-    for (const [key, value] of rateBuckets) if (value.resetAt <= now) rateBuckets.delete(key);
-  }
-}
-
-async function nexon<T>(path: string, env: Env, params: Record<string, string | number>): Promise<T> {
+async function nexon<T>(path: string, env: Env, trace: RequestTrace, params: Record<string, string | number>): Promise<T> {
   const url = new URL(`${API}${path}`);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
   let lastError = "NEXON Open API에 연결하지 못했습니다.";
+  let lastCode = "NEXON_UNAVAILABLE";
+  let upstreamStatus: number | undefined;
   for (let attempt = 0; attempt < 3; attempt += 1) {
+    const upstreamStartedAt = performance.now();
     const response = await fetch(url, {
       headers: { "x-nxopen-api-key": env.NEXON_API_KEY },
       signal: AbortSignal.timeout(12_000),
     }).catch(error => {
       lastError = error instanceof Error ? error.message : lastError;
+      lastCode = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "NEXON_TIMEOUT" : "NEXON_NETWORK_ERROR";
+      recordUpstream(env, trace, "nexon", path, performance.now() - upstreamStartedAt, false, 0, lastCode);
       return null;
     });
-    if (response?.ok) return response.json() as Promise<T>;
+    if (response?.ok) {
+      recordUpstream(env, trace, "nexon", path, performance.now() - upstreamStartedAt, true, response.status);
+      return response.json() as Promise<T>;
+    }
     if (response) {
+      upstreamStatus = response.status;
       const body = await response.json().catch(() => ({})) as { error?: { message?: string } };
       lastError = body.error?.message ?? `NEXON Open API 요청 실패 (${response.status})`;
+      lastCode = response.status === 429 ? "NEXON_RATE_LIMITED" : response.status >= 500 ? "NEXON_HTTP_ERROR" : "NEXON_REQUEST_FAILED";
+      recordUpstream(env, trace, "nexon", path, performance.now() - upstreamStartedAt, false, response.status, lastCode);
       if (response.status === 400 || response.status === 403 || response.status === 404) {
         const message = /api\s*key|apikey/i.test(lastError) ? "서비스 인증 정보를 확인할 수 없습니다." : lastError;
-        throw new ApiError(response.status === 404 ? 404 : 400, message, "NEXON_REQUEST_FAILED");
+        throw new ApiError(response.status === 404 ? 404 : 400, message, "NEXON_REQUEST_FAILED", "nexon", { upstreamStatus: response.status, stage: path });
       }
     }
     await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
   }
-  throw new ApiError(502, lastError, "NEXON_UNAVAILABLE");
+  throw new ApiError(502, lastError, lastCode, "nexon", { upstreamStatus, stage: path });
 }
 
 async function loadMetadata(): Promise<Metadata> {
@@ -196,8 +208,8 @@ function mapStats(info: Json) {
   };
 }
 
-async function mapMatch(id: string, ouid: string, env: Env, meta: Metadata) {
-  const detail = await nexon<{ matchDate: string; matchInfo: Json[] }>("/match-detail", env, { matchid: id });
+async function mapMatch(id: string, ouid: string, env: Env, meta: Metadata, trace: RequestTrace) {
+  const detail = await nexon<{ matchDate: string; matchInfo: Json[] }>("/match-detail", env, trace, { matchid: id });
   const mine = detail.matchInfo.find(item => item.ouid === ouid);
   const opponent = detail.matchInfo.find(item => item.ouid !== ouid);
   if (!mine || !opponent) throw new ApiError(502, "경기 상세 정보가 누락되었습니다.");
@@ -235,7 +247,7 @@ async function mapMatch(id: string, ouid: string, env: Env, meta: Metadata) {
   };
 }
 
-async function dashboard(url: URL, env: Env) {
+async function dashboard(url: URL, env: Env, trace: RequestTrace) {
   const nickname = (url.searchParams.get("nickname") ?? "").trim();
   const matchType = Number(url.searchParams.get("matchtype") ?? 50);
   const offset = Number(url.searchParams.get("offset") ?? 0);
@@ -245,18 +257,18 @@ async function dashboard(url: URL, env: Env) {
   if (!Number.isInteger(offset) || offset < 0 || offset > 10_000) throw new ApiError(400, "조회 위치가 올바르지 않습니다.", "INVALID_OFFSET");
   if (!Number.isInteger(limit) || limit < 1) throw new ApiError(400, "조회 개수가 올바르지 않습니다.", "INVALID_LIMIT");
 
-  const identity = await nexon<{ ouid: string }>("/id", env, { nickname });
+  const identity = await nexon<{ ouid: string }>("/id", env, trace, { nickname });
   const [profile, divisions, ids, meta] = await Promise.all([
-    nexon<{ ouid: string; nickname: string; level: number }>("/user/basic", env, { ouid: identity.ouid }),
-    nexon<Array<{ matchType: number; division: number }>>("/user/maxdivision", env, { ouid: identity.ouid }),
-    nexon<string[]>("/user/match", env, { ouid: identity.ouid, matchtype: matchType, offset, limit }),
+    nexon<{ ouid: string; nickname: string; level: number }>("/user/basic", env, trace, { ouid: identity.ouid }),
+    nexon<Array<{ matchType: number; division: number }>>("/user/maxdivision", env, trace, { ouid: identity.ouid }),
+    nexon<string[]>("/user/match", env, trace, { ouid: identity.ouid, matchtype: matchType, offset, limit }),
     loadMetadata(),
   ]);
 
   const matches: unknown[] = [];
   const warnings: string[] = [];
   for (let index = 0; index < ids.length; index += 5) {
-    const batch = await Promise.allSettled(ids.slice(index, index + 5).map(id => mapMatch(id, identity.ouid, env, meta)));
+    const batch = await Promise.allSettled(ids.slice(index, index + 5).map(id => mapMatch(id, identity.ouid, env, meta, trace)));
     for (const result of batch) {
       if (result.status === "fulfilled") matches.push(result.value);
       else warnings.push(result.reason instanceof Error ? result.reason.message : "경기 조회 실패");
@@ -292,7 +304,7 @@ function positionCodes(values: string[]) {
   return [...new Set(values.flatMap(value => SEARCH_POSITIONS[value.toUpperCase()] ?? []))];
 }
 
-async function dataCenterPlayerIds(query: string, seasons: number[], positions: string[], salaryMin?: number, salaryMax?: number, overallMin?: number, overallMax?: number) {
+async function dataCenterPlayerIds(query: string, seasons: number[], positions: string[], env: Env, trace: RequestTrace, salaryMin?: number, salaryMax?: number, overallMin?: number, overallMax?: number) {
   const form = new URLSearchParams({
     strPlayerName: query,
     strSeason: seasons.length ? `,${seasons.join(",")},` : "",
@@ -300,11 +312,11 @@ async function dataCenterPlayerIds(query: string, seasons: number[], positions: 
     n4SalaryMin: String(salaryMin ?? 0), n4SalaryMax: String(salaryMax ?? 99),
     n4OvrMin: String(overallMin ?? 0), n4OvrMax: String(overallMax ?? 250),
   });
-  const html = await dataCenterFetch("/datacenter/PlayerList", {
+  const html = await dataCenterFetch("/datacenter/PlayerList", trace, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
     body: form.toString(),
-  });
+  }, env);
   const ids = [...html.matchAll(/(?:spid|spId|\.val)\s*(?:\(|=|:)\s*["']?(\d{8,10})/gi)].map(match => Number(match[1]));
   return [...new Set(ids)].slice(0, 100);
 }
@@ -318,7 +330,7 @@ function playerFilterMetadata(meta: Metadata) {
   };
 }
 
-async function searchPlayers(url: URL) {
+async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env: Env, trace: RequestTrace) {
   const rawQuery = (url.searchParams.get("q") ?? "").trim();
   const query = rawQuery.toLocaleLowerCase("ko-KR");
   const seasons = listParam(url, "seasonIds").map(Number).filter(Number.isInteger);
@@ -345,7 +357,7 @@ async function searchPlayers(url: URL) {
   const meta = await loadMetadata();
   let candidateIds: number[] = [];
   try {
-    candidateIds = await dataCenterPlayerIds(rawQuery, seasons, positions, salaryMin, salaryMax, overallMin, overallMax);
+    candidateIds = await dataCenterPlayerIds(rawQuery, seasons, positions, env, trace, salaryMin, salaryMax, overallMin, overallMax);
   } catch {
     candidateIds = [];
   }
@@ -369,11 +381,17 @@ async function searchPlayers(url: URL) {
       };
     })
     .sort((a, b) => Number(b.name.toLocaleLowerCase("ko-KR") === query) - Number(a.name.toLocaleLowerCase("ko-KR") === query) || Number(b.name.toLocaleLowerCase("ko-KR").startsWith(query)) - Number(a.name.toLocaleLowerCase("ko-KR").startsWith(query)) || b.seasonId - a.seasonId)
-    .slice(0, 100);
+    .slice(0, playerSearchCandidateLimit(limit));
   const rows: Array<(typeof baseRows)[number] & Awaited<ReturnType<typeof playerSearchFacts>>> = [];
   for (let index = 0; index < baseRows.length; index += 8) {
     const batch = baseRows.slice(index, index + 8);
-    const facts = await Promise.allSettled(batch.map(card => playerSearchFacts(card.spId, grade)));
+    const facts = await Promise.allSettled(batch.map(card => loadCachedPlayerFacts(
+      card.spId,
+      grade,
+      cache,
+      ctx,
+      () => playerSearchFacts(card.spId, grade, env, trace),
+    )));
     batch.forEach((card, batchIndex) => rows.push({
       ...card,
       ...(facts[batchIndex]?.status === "fulfilled" ? facts[batchIndex].value : emptyPlayerSearchFacts(grade)),
@@ -401,27 +419,8 @@ async function searchPlayers(url: URL) {
   return { query: rawQuery, count: players.length, players, source: "NEXON Open API metadata / EA SPORTS FC ONLINE Data Center" };
 }
 
-function decodeHtml(value: string) {
-  return value
-    .replace(/<br\s*\/?>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function firstMatch(html: string, expression: RegExp, fallback = "") {
-  return decodeHtml(expression.exec(html)?.[1] ?? fallback);
-}
-
-function classText(html: string, className: string) {
-  return firstMatch(html, new RegExp(`<[^>]+class=["'][^"']*\\b${className}\\b[^"']*["'][^>]*>([\\s\\S]*?)<\\/[^>]+>`, "i"));
-}
-
-async function dataCenterFetch(path: string, init?: RequestInit) {
+async function dataCenterFetch(path: string, trace: RequestTrace, init?: RequestInit, env?: Env) {
+  const upstreamStartedAt = performance.now();
   const response = await fetch(`${DATA_CENTER}${path}`, {
     ...init,
     headers: {
@@ -431,8 +430,18 @@ async function dataCenterFetch(path: string, init?: RequestInit) {
       ...(init?.headers ?? {}),
     },
     signal: AbortSignal.timeout(15_000),
+  }).catch(error => {
+    const timeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    const code = timeout ? "DATA_CENTER_TIMEOUT" : "DATA_CENTER_NETWORK_ERROR";
+    if (env) recordUpstream(env, trace, "data-center", path, performance.now() - upstreamStartedAt, false, 0, code);
+    throw new ApiError(502, "FC 온라인 데이터센터에 연결하지 못했습니다.", code, "data-center", { stage: path });
   });
-  if (!response.ok) throw new ApiError(502, `FC 온라인 데이터센터 응답 오류 (${response.status})`, "DATA_CENTER_UNAVAILABLE");
+  if (!response.ok) {
+    const code = response.status === 403 ? "DATA_CENTER_BLOCKED" : "DATA_CENTER_HTTP_ERROR";
+    if (env) recordUpstream(env, trace, "data-center", path, performance.now() - upstreamStartedAt, false, response.status, code);
+    throw new ApiError(502, `FC 온라인 데이터센터 응답 오류 (${response.status})`, code, "data-center", { upstreamStatus: response.status, stage: path });
+  }
+  if (env) recordUpstream(env, trace, "data-center", path, performance.now() - upstreamStartedAt, true, response.status);
   return response.text();
 }
 
@@ -440,16 +449,24 @@ function emptyPlayerSearchFacts(grade = 1) {
   return { grade, overall: 0, primaryPosition: "-", salary: 0, height: "", weight: "", bodyType: "", leftFoot: 0, rightFoot: 0, weakFoot: 0, preferredFoot: "-", skillMoves: 0, nation: "", traits: [] as string[], abilities: [] as Array<{ label: string; value: number }> };
 }
 
-async function playerSearchFacts(spId: number, grade = 1) {
+async function playerSearchFacts(spId: number, grade: number, env: Env, trace: RequestTrace) {
   const form = new URLSearchParams({
     spid: String(spId), n1Strong: String(grade), n1Grow: "0", n4TeamColorId: "0", n4TeamColorLv: "0",
     n4TeamColorId_Enhance: "0", n4TeamColorLv_Enhance: "0", n4TeamColorId_Feature: "0", n1Change: "0", strPlayerImg: "",
   });
-  const html = await dataCenterFetch("/datacenter/PlayerAbility", {
+  const html = await dataCenterFetch("/datacenter/PlayerAbility", trace, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
     body: form.toString(),
-  });
+  }, env);
+  const validation = validatePlayerAbilityHtml(html, false);
+  recordParser(env, trace, "player_search_facts", validation);
+  if (!validation.success) {
+    throw new ApiError(502, "선수 데이터 형식이 변경되어 검색 정보를 해석하지 못했습니다.", "PARSER_REQUIRED_FIELD_MISSING", "parser", {
+      stage: "player-search-facts",
+      missingFields: validation.missingFields,
+    });
+  }
   const foot = firstMatch(html, /<span class="etc foot">([\s\S]*?)<\/span>/i);
   const leftFoot = Number(/L\s*(\d+)/i.exec(foot)?.[1] ?? 0);
   const rightFoot = Number(/R\s*(\d+)/i.exec(foot)?.[1] ?? 0);
@@ -472,101 +489,7 @@ async function playerSearchFacts(spId: number, grade = 1) {
   };
 }
 
-function parseAbilities(html: string) {
-  const start = html.indexOf('<div class="content_bottom">');
-  const scope = start >= 0 ? html.slice(start) : html;
-  const rows: Array<{ label: string; value: number }> = [];
-  const expression = /<li class="ab"[\s\S]*?<div class="txt">([\s\S]*?)<\/div>\s*<div class="value[^"]*">\s*(\d+)/gi;
-  for (const match of scope.matchAll(expression)) rows.push({ label: decodeHtml(match[1]), value: Number(match[2]) });
-  return rows.filter((row, index) => row.label && rows.findIndex(candidate => candidate.label === row.label) === index);
-}
-
-function parseSummaryAbilities(html: string) {
-  const start = html.indexOf('<div class="content_middle">');
-  const end = html.indexOf('<div class="content_bottom">');
-  const scope = start >= 0 && end > start ? html.slice(start, end) : "";
-  const rows: Array<{ label: string; value: number }> = [];
-  const expression = /<li class="ab">\s*<div class="txt">([\s\S]*?)<\/div>\s*<div class="value[^"]*">\s*(\d+)/gi;
-  for (const match of scope.matchAll(expression)) rows.push({ label: decodeHtml(match[1]), value: Number(match[2]) });
-  return rows.slice(-6);
-}
-
-function parsePositions(html: string) {
-  const scope = /<div class="ovr_set">([\s\S]*?)<\/div>\s*<\/div>/.exec(html)?.[1] ?? "";
-  const rows: Array<{ position: string; value: number }> = [];
-  for (const match of scope.matchAll(/<div class="position\s+([a-z]+)\s+value">\s*(\d+)/gi)) {
-    rows.push({ position: match[1].toUpperCase(), value: Number(match[2]) });
-  }
-  return rows;
-}
-
-function parseTraits(html: string) {
-  const scope = /<div class="skill_wrap">([\s\S]*?)<div class="en_selector_wrap">/i.exec(html)?.[1] ?? "";
-  return [...scope.matchAll(/<span class="desc">([\s\S]*?)<\/span>/gi)].map(match => decodeHtml(match[1])).filter(Boolean);
-}
-
-type TeamColorOption = { id: number; level: number; name: string };
-
-function parseTeamColorLinks(scope: string, idIndex: number, levelIndex?: number): TeamColorOption[] {
-  const rows: TeamColorOption[] = [];
-  const expression = /<a[^>]*onclick="DataCenter\.GetPlayerAbility\(([^)]*)\);?"[^>]*>([\s\S]*?)<\/a>/gi;
-  for (const match of scope.matchAll(expression)) {
-    const args = match[1].split(",").map(value => Number(value.trim()));
-    const id = args[idIndex] ?? 0;
-    const level = levelIndex === undefined ? 1 : args[levelIndex] ?? 1;
-    const name = decodeHtml(match[2]);
-    if (id > 0 && name) rows.push({ id, level, name });
-  }
-  return rows.filter((row, index) => rows.findIndex(candidate => candidate.id === row.id && candidate.level === row.level) === index);
-}
-
-function parseTeamColorOptions(html: string, seasonName = "") {
-  const start = html.indexOf('<div class="teamcolor_selector_wrap">');
-  const end = html.indexOf('<div class="ovr_set">', start);
-  const scope = start >= 0 ? html.slice(start, end > start ? end : undefined) : "";
-  const affiliationStart = scope.indexOf('<div class="tdefault">');
-  const featureStart = scope.indexOf('<div class="tspecial">');
-  const enhancementScope = scope.slice(0, affiliationStart >= 0 ? affiliationStart : undefined);
-  const affiliationScope = affiliationStart >= 0 ? scope.slice(affiliationStart, featureStart >= 0 ? featureStart : undefined) : "";
-  const featureScope = featureStart >= 0 ? scope.slice(featureStart) : "";
-  return {
-    enhancement: parseTeamColorLinks(enhancementScope, 5, 6),
-    affiliation: parseTeamColorLinks(affiliationScope, 3, 4).map(option => ({ ...option, level: affiliationTeamColorLevel(option.id, seasonName, option.name) })),
-    feature: parseTeamColorLinks(featureScope, 7),
-  };
-}
-
-function parseClubCareer(html: string) {
-  const scope = /<div class="content data_detail_club">([\s\S]*?)<\/div>\s*<\/div>\s*<\/div>/i.exec(html)?.[1] ?? "";
-  const rows: Array<{ years: string; club: string; loan: string }> = [];
-  for (const match of scope.matchAll(/<li>[\s\S]*?<div class="td year">([\s\S]*?)<\/div>[\s\S]*?<div class="td club">([\s\S]*?)<\/div>[\s\S]*?<div class="td rent">([\s\S]*?)<\/div>[\s\S]*?<\/li>/gi)) {
-    rows.push({ years: decodeHtml(match[1]), club: decodeHtml(match[2]), loan: decodeHtml(match[3]) });
-  }
-  return rows;
-}
-
-function parseRankerStats(html: string) {
-  const scope = /<div class="ranker_record">([\s\S]*?)<div class="view_wrap">/i.exec(html)?.[1] ?? "";
-  const labels = ["출전", "득점", "도움", "유효 슈팅", "일반 슈팅", "패스 성공률", "드리블 성공률", "공중볼 경합 성공률", "가로채기", "태클 성공률", "차단 성공률", "선방", "평점"];
-  const values = [...scope.matchAll(/<span class="td[^"']*">([\s\S]*?)<\/span>/gi)].map(match => decodeHtml(match[1]));
-  return Object.fromEntries(labels.map((label, index) => [label, values[index] ?? "-"]));
-}
-
-function parsePrice(html: string) {
-  const current = Number((/<strong\s+alt="([\d,]+)"/i.exec(html)?.[1] ?? "0").replace(/,/g, ""));
-  let history: Array<{ date: string; value: number }> = [];
-  const jsonText = /var json1\s*=\s*({[\s\S]*?})\s*var option\s*=/i.exec(html)?.[1] ?? "";
-  if (jsonText) {
-    const timeBlock = /"time"\s*:\s*\[([\s\S]*?)\]/i.exec(jsonText)?.[1] ?? "";
-    const valueBlock = /"value"\s*:\s*\[([\s\S]*?)\]/i.exec(jsonText)?.[1] ?? "";
-    const dates = [...timeBlock.matchAll(/"([^"]+)"/g)].map(match => match[1]);
-    const values = [...valueBlock.matchAll(/"([\d.]+)"/g)].map(match => Number(match[1]));
-    history = values.map((value, index) => ({ date: dates[index] ?? "", value })).filter(item => item.date && Number.isFinite(item.value));
-  }
-  return { current, history: history.slice(-365) };
-}
-
-async function playerDetail(url: URL) {
+async function playerDetail(url: URL, env: Env, trace: RequestTrace) {
   const spId = Number(url.searchParams.get("spid"));
   const grade = Number(url.searchParams.get("grade") ?? 1);
   const grow = url.searchParams.get("adaptation") === "5" ? 4 : 0;
@@ -583,8 +506,8 @@ async function playerDetail(url: URL) {
   const post = (body: string) => ({ method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: `${DATA_CENTER}${detailPath}` }, body }) satisfies RequestInit;
   const hasModifiers = grow > 0 || affiliationId > 0 || enhancementId > 0 || featureId > 0;
   const [pageHtml, baseAbilityHtml, priceHtml, meta] = await Promise.all([
-    dataCenterFetch(detailPath), dataCenterFetch("/datacenter/PlayerAbility", post(baseForm.toString())),
-    dataCenterFetch("/datacenter/PlayerPriceGraph", post(new URLSearchParams({ spid: String(spId), n1strong: String(grade) }).toString())), loadMetadata(),
+    dataCenterFetch(detailPath, trace, undefined, env), dataCenterFetch("/datacenter/PlayerAbility", trace, post(baseForm.toString()), env),
+    dataCenterFetch("/datacenter/PlayerPriceGraph", trace, post(new URLSearchParams({ spid: String(spId), n1strong: String(grade) }).toString()), env), loadMetadata(),
   ]);
   const seasonId = Math.floor(spId / 1_000_000);
   const seasonName = meta.seasons.get(seasonId) ?? "시즌 정보 없음";
@@ -592,7 +515,12 @@ async function playerDetail(url: URL) {
   const selectedAffiliation = teamColorOptions.affiliation.find(option => option.id === affiliationId);
   const affiliationLevel = affiliationTeamColorLevel(affiliationId, seasonName, selectedAffiliation?.name ?? "");
   const appliedForm = buildPlayerAbilityForm({ spId, grade, grow, affiliationId, affiliationLevel, enhancementId, enhancementLevel, featureId });
-  const abilityHtml = hasModifiers ? await dataCenterFetch("/datacenter/PlayerAbility", post(appliedForm.toString())) : baseAbilityHtml;
+  const abilityHtml = hasModifiers ? await dataCenterFetch("/datacenter/PlayerAbility", trace, post(appliedForm.toString()), env) : baseAbilityHtml;
+  const validation = validatePlayerAbilityHtml(abilityHtml);
+  const baseValidation = validatePlayerAbilityHtml(baseAbilityHtml);
+  recordParser(env, trace, "player_detail", validation);
+  if (abilityHtml !== baseAbilityHtml) recordParser(env, trace, "player_detail_base", baseValidation);
+  const missingFields = [...new Set([...validation.missingFields, ...baseValidation.missingFields.map(field => `base.${field}`)])];
   const basePositions = parsePositions(baseAbilityHtml);
   const positions = parsePositions(abilityHtml).map(row => ({ ...row, baseValue: basePositions.find(base => base.position === row.position)?.value ?? row.value, delta: row.value - (basePositions.find(base => base.position === row.position)?.value ?? row.value) }));
   const baseAbilities = parseAbilities(baseAbilityHtml);
@@ -629,42 +557,89 @@ async function playerDetail(url: URL) {
     ],
     sourceUrl: `${DATA_CENTER}${detailPath}`,
     source: "EA SPORTS FC ONLINE Data Center / NEXON Open API metadata",
+    degraded: !validation.success || !baseValidation.success || validation.partial || baseValidation.partial,
+    missingFields,
   };
 }
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(request, env) });
     const url = new URL(request.url);
+    const trace = createRequestTrace(request, env, url.pathname);
+    let observedError: ApiError | undefined;
+    let response: Response;
     try {
-      if (request.method !== "GET") throw new ApiError(405, "허용되지 않은 요청 방식입니다.", "METHOD_NOT_ALLOWED");
-      if (url.pathname === "/" || url.pathname === "/health") {
-        return json(request, env, { ok: true, service: "FC Online Lab API", version: "0.1.0" }, 200, { "Cache-Control": "no-store" });
+      assertAllowedOrigin(request, env);
+      if (request.method === "OPTIONS") {
+        response = new Response(null, { status: 204, headers: corsHeaders(request, env) });
+      } else if (request.method === "POST" && url.pathname === "/v1/telemetry/client-error") {
+        const contentLength = Number(request.headers.get("Content-Length") ?? 0);
+        if (contentLength > 16_384) throw new ApiError(413, "오류 보고가 너무 큽니다.", "TELEMETRY_TOO_LARGE", "client");
+        if (await checkRateLimits(request, url.pathname, env.API_RATE_LIMITER, env.EXPENSIVE_RATE_LIMITER) !== "allowed") {
+          throw new ApiError(429, "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", "RATE_LIMITED", "client");
+        }
+        const raw = await request.text();
+        if (raw.length > 16_384) throw new ApiError(413, "오류 보고가 너무 큽니다.", "TELEMETRY_TOO_LARGE", "client");
+        let input: unknown;
+        try { input = JSON.parse(raw); } catch { throw new ApiError(400, "오류 보고 JSON 형식이 올바르지 않습니다.", "INVALID_TELEMETRY", "client"); }
+        recordClientError(env, trace, parseClientErrorPayload(input));
+        response = json(request, env, { accepted: true, requestId: trace.requestId }, 202, { "Cache-Control": "no-store" });
+      } else {
+        if (request.method !== "GET") throw new ApiError(405, "허용되지 않은 요청 방식입니다.", "METHOD_NOT_ALLOWED", "client");
+        if (url.pathname === "/" || url.pathname === "/health") {
+          response = json(request, env, {
+            ok: true,
+            service: "FC Online Lab API",
+            appVersion: APP_VERSION,
+            apiVersion: API_VERSION,
+            serverVersion: trace.serverVersion,
+            deployedAt: env.CF_VERSION_METADATA?.timestamp ?? null,
+            accessPolicy: env.API_ACCESS_POLICY || "public-native",
+          }, 200, { "Cache-Control": "no-store" });
+        } else {
+          const isDashboard = url.pathname === "/v1/dashboard";
+          const isPlayerSearch = url.pathname === "/v1/players/search";
+          const isPlayerFilters = url.pathname === "/v1/players/filters";
+          const isPlayerDetail = url.pathname === "/v1/players/detail";
+          if (!isDashboard && !isPlayerSearch && !isPlayerFilters && !isPlayerDetail) throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND", "client");
+          if (await checkRateLimits(request, url.pathname, env.API_RATE_LIMITER, env.EXPENSIVE_RATE_LIMITER) !== "allowed") {
+            throw new ApiError(429, "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", "RATE_LIMITED", "client");
+          }
+
+          const cache = await caches.open("fc-online-lab-api");
+          const cacheUrl = new URL(url);
+          cacheUrl.searchParams.sort();
+          const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
+          const cached = await cache.match(cacheKey);
+          if (cached) {
+            response = new Response(cached.body, { status: cached.status, headers: { ...Object.fromEntries(cached.headers), ...corsHeaders(request, env), "X-Cache": "HIT" } });
+          } else {
+            const result = isPlayerSearch
+              ? await searchPlayers(url, cache, ctx, env, trace)
+              : isPlayerFilters
+                ? playerFilterMetadata(await loadMetadata())
+                : isPlayerDetail
+                  ? await playerDetail(url, env, trace)
+                  : await dashboard(url, env, trace);
+            const ttl = Math.min(Math.max(Number(env.CACHE_TTL_SECONDS) || 90, 30), 300);
+            response = json(request, env, result, 200, { "Cache-Control": `public, max-age=${ttl}`, "X-Cache": "MISS" });
+            ctx.waitUntil(cache.put(cacheKey, response.clone()));
+          }
+        }
       }
-      const isDashboard = url.pathname === "/v1/dashboard";
-      const isPlayerSearch = url.pathname === "/v1/players/search";
-      const isPlayerFilters = url.pathname === "/v1/players/filters";
-      const isPlayerDetail = url.pathname === "/v1/players/detail";
-      if (!isDashboard && !isPlayerSearch && !isPlayerFilters && !isPlayerDetail) throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND");
-      checkRateLimit(request);
-
-      const cache = await caches.open("fc-online-lab-api");
-      const cacheUrl = new URL(url);
-      cacheUrl.searchParams.sort();
-      const cacheKey = new Request(cacheUrl.toString(), { method: "GET" });
-      const cached = await cache.match(cacheKey);
-      if (cached) return new Response(cached.body, { status: cached.status, headers: { ...Object.fromEntries(cached.headers), ...corsHeaders(request, env), "X-Cache": "HIT" } });
-
-      const result = isPlayerSearch ? await searchPlayers(url) : isPlayerFilters ? playerFilterMetadata(await loadMetadata()) : isPlayerDetail ? await playerDetail(url) : await dashboard(url, env);
-      const ttl = Math.min(Math.max(Number(env.CACHE_TTL_SECONDS) || 90, 30), 300);
-      const response = json(request, env, result, 200, { "Cache-Control": `public, max-age=${ttl}`, "X-Cache": "MISS" });
-      ctx.waitUntil(cache.put(cacheKey, response.clone()));
-      return response;
     } catch (error) {
-      const status = error instanceof ApiError ? error.status : 500;
-      const code = error instanceof ApiError ? error.code : "INTERNAL_ERROR";
-      const message = error instanceof Error ? error.message : "서버 오류가 발생했습니다.";
-      return json(request, env, { error: { code, message } }, status, { "Cache-Control": "no-store" });
+      observedError = error instanceof ApiError
+        ? error
+        : new ApiError(500, "서버 오류가 발생했습니다.", "INTERNAL_ERROR", "worker");
+      response = json(request, env, { error: { code: observedError.code, message: observedError.message, source: observedError.source, requestId: trace.requestId } }, observedError.status, {
+        "Cache-Control": "no-store",
+        ...(observedError.status === 429 ? { "Retry-After": "60" } : {}),
+      });
     }
+    const headers = new Headers(response.headers);
+    for (const [key, value] of Object.entries(diagnosticHeaders(trace))) headers.set(key, value);
+    response = new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+    recordRequest(env, trace, response.status, response.headers.get("X-Cache") ?? "NONE", observedError);
+    return response;
   },
 } satisfies ExportedHandler<Env>;

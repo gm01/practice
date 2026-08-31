@@ -1,11 +1,12 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatNexonDate } from "../shared/nexon";
-import { RankerView, TradeView } from "./components/FeatureViews";
+import { POSITION_COORDINATES } from "../shared/formation";
 import PlayerPhoto from "./components/PlayerPhoto";
 import appIcon from "./assets/app-icon.png";
 import AnalysisReport from "./components/AnalysisReport";
 import PlayerDetail from "./components/PlayerDetail";
 import PlayerDatabase from "./components/PlayerDatabase";
+import { useServiceDiagnostics } from "./hooks/useServiceDiagnostics";
 
 type DetailTab = "summary" | "stats" | "lineup" | "shots";
 const resultLabel: Record<string, string> = {
@@ -66,37 +67,6 @@ function StatRow({
   );
 }
 
-const positionCoordinates: Record<number, [number, number]> = {
-  0: [50, 90],
-  1: [50, 81],
-  2: [88, 75],
-  3: [82, 78],
-  4: [66, 77],
-  5: [50, 78],
-  6: [34, 77],
-  7: [18, 78],
-  8: [12, 70],
-  9: [65, 64],
-  10: [50, 65],
-  11: [35, 64],
-  12: [84, 54],
-  13: [66, 53],
-  14: [50, 54],
-  15: [34, 53],
-  16: [16, 54],
-  17: [68, 42],
-  18: [50, 43],
-  19: [32, 42],
-  20: [67, 28],
-  21: [50, 30],
-  22: [33, 28],
-  23: [84, 22],
-  24: [63, 17],
-  25: [50, 16],
-  26: [37, 17],
-  27: [16, 22],
-};
-
 function Lineup({
   players,
   onSelectPlayer,
@@ -109,7 +79,7 @@ function Lineup({
       {players
         .filter((player) => player.positionCode < 28 && player.rating > 0)
         .map((player) => {
-          const [x, y] = positionCoordinates[player.positionCode] ?? [50, 50];
+          const [x, y] = POSITION_COORDINATES[player.positionCode] ?? [50, 50];
           return (
             <button
               className="formation-player"
@@ -504,7 +474,6 @@ function MatchDetail({
 }
 
 export default function App() {
-  const [apiKey, setApiKey] = useState("");
   const [nickname, setNickname] = useState("");
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -525,16 +494,12 @@ export default function App() {
     { id: 52, name: "감독모드" },
     { id: 60, name: "공식 친선" },
   ]);
-  const [view, setView] = useState<"matches" | "trades" | "ranker" | "players">("matches");
-  const [trades, setTrades] = useState<TradeRecord[]>([]);
-  const [tradeOwner, setTradeOwner] = useState("");
-  const [rankers, setRankers] = useState<RankerRecord[]>([]);
-  const [featureLoading, setFeatureLoading] = useState(false);
+  const [view, setView] = useState<"matches" | "players">("matches");
   const [playerInfoQuery,setPlayerInfoQuery]=useState("");
   const [playerInfoBack,setPlayerInfoBack]=useState<(() => void)|null>(null);
   const changePlayerInfoBack=useCallback((handler:(()=>void)|null)=>setPlayerInfoBack(handler?()=>handler:null),[]);
-  const tradeRequestId = useRef(0);
   const [searches, setSearches] = useState<SearchItem[]>(() => readSearches());
+  const diagnostics = useServiceDiagnostics();
   useEffect(() => {
     window.fcOnline
       .loadSettings()
@@ -577,7 +542,6 @@ export default function App() {
     if (offset === 0) setWarnings([]);
     try {
       const data = await window.fcOnline.fetchDashboard({
-        apiKey,
         nickname,
         offset,
         matchType,
@@ -644,78 +608,6 @@ export default function App() {
       );
     setSearches(next);
     writeSearches(next);
-  }
-  async function openTrades() {
-    const requestId = ++tradeRequestId.current;
-    setView("trades");
-    setTrades([]);
-    setTradeOwner("API 키 계정");
-    if (!apiKey.trim()) {
-      setError("API 키를 입력해 주세요.");
-      return;
-    }
-    setFeatureLoading(true);
-    setError("");
-    try {
-      const result = await window.fcOnline.fetchTrades({ apiKey });
-      const nextTrades = Array.isArray(result) ? result : result?.trades;
-      if (!Array.isArray(nextTrades))
-        throw new Error("거래 API 응답 형식을 확인할 수 없습니다.");
-      if (requestId === tradeRequestId.current) setTrades(nextTrades);
-    } catch (reason) {
-      if (requestId === tradeRequestId.current) {
-        setTrades([]);
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : "거래 기록을 불러오지 못했습니다.",
-        );
-      }
-    } finally {
-      if (requestId === tradeRequestId.current) setFeatureLoading(false);
-    }
-  }
-  async function openRankers() {
-    setView("ranker");
-    if (rankers.length || !apiKey) return;
-    const candidates = matches
-      .flatMap((match) => match.players)
-      .filter(
-        (player, index, array) =>
-          player.rating > 0 &&
-          player.positionCode < 28 &&
-          array.findIndex(
-            (item) =>
-              item.spId === player.spId &&
-              item.positionCode === player.positionCode,
-          ) === index,
-      )
-      .slice(0, 5);
-    if (!candidates.length) {
-      setError("먼저 경기 전적을 불러와 주세요.");
-      return;
-    }
-    setFeatureLoading(true);
-    setError("");
-    try {
-      setRankers(
-        await window.fcOnline.fetchRankerStats({
-          apiKey,
-          players: candidates.map((player) => ({
-            id: player.spId,
-            po: player.positionCode,
-          })),
-        }),
-      );
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "랭커 통계를 불러오지 못했습니다.",
-      );
-    } finally {
-      setFeatureLoading(false);
-    }
   }
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -800,7 +692,6 @@ export default function App() {
                   onChange={(e) => {
                     setMatchType(Number(e.target.value));
                     setMatches([]);
-                    setRankers([]);
                   }}
                 >
                   {matchTypes
@@ -910,15 +801,6 @@ export default function App() {
                 경기·분석
               </button>
               <button onClick={() => setView("players")}>선수 정보</button>
-              <button
-                disabled
-                title="NEXON API에서 구단주별 거래 조회를 지원하지 않습니다"
-              >
-                거래 준비 중
-              </button>
-              <button disabled title="공개 서버 연동 준비 중">
-                랭커 비교 준비 중
-              </button>
               {profile && (
                 <button onClick={() => toggleSearchFavorite(profile.nickname)}>
                   {searches.find((row) => row.nickname === profile.nickname)
@@ -968,7 +850,6 @@ export default function App() {
                   <>
                     <AnalysisReport
                       matches={matches}
-                      rankers={rankers}
                       onSelectPlayer={(spId) =>
                         setSelectedPlayer({ spId, side: "mine" })
                       }
@@ -1026,21 +907,12 @@ export default function App() {
                 )}
               </>
             )}
-            {view === "trades" && (
-              <TradeView
-                trades={trades}
-                loading={featureLoading}
-                owner={tradeOwner}
-              />
-            )}{" "}
-            {view === "ranker" && (
-              <RankerView rankers={rankers} loading={featureLoading} />
-            )}
           </section>
         </>
       )}
       <footer className="app-footer">
         <span>FC ONLINE LAB</span>
+        <p>앱 0.1.0 · API v{diagnostics.apiVersion ?? "-"} · 서버 {diagnostics.serverVersion?.slice(0, 8) ?? "-"} · 요청 {diagnostics.requestId?.slice(0, 8) ?? "-"}</p>
         <p>Data based on NEXON Open API</p>
       </footer>
     </main>

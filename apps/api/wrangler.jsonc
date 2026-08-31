@@ -7,8 +7,36 @@
   "observability": {
     "enabled": true
   },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
+  "analytics_engine_datasets": [
+    {
+      "binding": "FC_ONLINE_METRICS",
+      "dataset": "fc_online_lab_metrics"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "API_RATE_LIMITER",
+      "namespace_id": "2026090101",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    },
+    {
+      "name": "EXPENSIVE_RATE_LIMITER",
+      "namespace_id": "2026090102",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    }
+  ],
   "vars": {
     "ALLOWED_ORIGINS": "*",
+    "API_ACCESS_POLICY": "public-native",
     "CACHE_TTL_SECONDS": "90"
   }
 }
