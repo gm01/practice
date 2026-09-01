@@ -1,6 +1,7 @@
 import { affiliationTeamColorLevel } from "./playerAbility";
 
 export type TeamColorOption = { id: number; level: number; name: string };
+export type TeamColorCatalogItem = { id: number; level: number; name: string };
 export type ParserValidation = {
   success: boolean;
   partial: boolean;
@@ -59,6 +60,28 @@ export function parsePositions(html: string) {
 export function parseTraits(html: string) {
   const scope = /<div class="skill_wrap">([\s\S]*?)<div class="en_selector_wrap">/i.exec(html)?.[1] ?? "";
   return [...scope.matchAll(/<span class="desc">([\s\S]*?)<\/span>/gi)].map(match => decodeHtml(match[1])).filter(Boolean);
+}
+
+export function parseTeamColorCatalog(html: string): TeamColorCatalogItem[] {
+  const rows: TeamColorCatalogItem[] = [];
+  const expression = /DataCenter\.GetTeamColorDetail\((\d+)\)[\s\S]*?<div class=["']name["']>([\s\S]*?)<\/div>\s*<div class=["']level["']>([\s\S]*?)<\/div>/gi;
+  for (const match of html.matchAll(expression)) {
+    const id = Number(match[1]);
+    const name = decodeHtml(match[2]);
+    const level = Number(decodeHtml(match[3]).match(/\d+/)?.[0] ?? 0);
+    if (id > 0 && name) rows.push({ id, name, level });
+  }
+  return rows.filter((row, index) => rows.findIndex(candidate => candidate.id === row.id) === index);
+}
+
+export function parseTeamColorPlayerIds(payload: string) {
+  let body: { players?: Array<{ spid?: number | string }> };
+  try {
+    body = JSON.parse(payload) as { players?: Array<{ spid?: number | string }> };
+  } catch {
+    return [];
+  }
+  return [...new Set((body.players ?? []).map(player => Number(player.spid)).filter(id => Number.isInteger(id) && id >= 10_000_000))];
 }
 
 function parseTeamColorLinks(scope: string, idIndex: number, levelIndex?: number): TeamColorOption[] {

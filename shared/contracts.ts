@@ -108,6 +108,7 @@ export type PlayerAbilityFilter = { label: string; min?: number; max?: number };
 
 export type PlayerSearchFilters = {
   query: string;
+  teamColorId?: number;
   seasonIds?: number[];
   positions?: string[];
   grade?: number;
@@ -134,6 +135,7 @@ export type PlayerSearchFilters = {
 };
 
 export type PlayerFilterMetadata = {
+  teamColors: Array<{ id: number; name: string; level: number }>;
   seasons: Array<{ id: number; name: string; imageUrl: string }>;
   positions: string[];
   abilities: string[];

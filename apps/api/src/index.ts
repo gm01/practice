@@ -10,7 +10,9 @@ import {
   parsePrice,
   parseRankerStats,
   parseSummaryAbilities,
+  parseTeamColorCatalog,
   parseTeamColorOptions,
+  parseTeamColorPlayerIds,
   parseTraits,
   validatePlayerAbilityHtml,
 } from "./dataCenterParser";
@@ -69,6 +71,7 @@ type Metadata = {
 };
 
 let metadataCache: Promise<Metadata> | null = null;
+let teamColorCatalogCache: Promise<Array<{ id: number; name: string; level: number }>> | null = null;
 
 function json(request: Request, env: Env, body: unknown, status = 200, extra: HeadersInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -321,8 +324,45 @@ async function dataCenterPlayerIds(query: string, seasons: number[], positions: 
   return [...new Set(ids)].slice(0, 100);
 }
 
-function playerFilterMetadata(meta: Metadata) {
+async function loadTeamColorCatalog(env: Env, trace: RequestTrace) {
+  if (!teamColorCatalogCache) teamColorCatalogCache = dataCenterFetch("/datacenter/teamcolor", trace, undefined, env)
+    .then(html => {
+      const rows = parseTeamColorCatalog(html);
+      if (!rows.length) throw new ApiError(502, "팀컬러 목록을 해석하지 못했습니다.", "TEAM_COLOR_CATALOG_INVALID", "data-center");
+      return rows.sort((a, b) => a.name.localeCompare(b.name, "ko-KR") || a.id - b.id);
+    })
+    .catch(error => {
+      teamColorCatalogCache = null;
+      throw error;
+    });
+  return teamColorCatalogCache;
+}
+
+async function dataCenterTeamColorPlayerIds(teamColorId: number, query: string, seasons: number[], positions: string[], env: Env, trace: RequestTrace, salaryMin?: number, salaryMax?: number, overallMin?: number, overallMax?: number) {
+  const form = new URLSearchParams({
+    teamcolorid: String(teamColorId),
+    strPlayerName: query,
+    strSeason: seasons.length ? `,${seasons.join(",")},` : "",
+    strPosition: positionCodes(positions).length ? `,${positionCodes(positions).join(",")},` : "",
+    strOrderby: "overallrating descending, salary descending",
+    n1Confederation: "0", n4LeagueId: "0", n4TeamId: "0", n4NationId: "0",
+    n4SalaryMin: String(salaryMin ?? 4), n4SalaryMax: String(salaryMax ?? 99),
+    n4OvrMin: String(overallMin ?? 40), n4OvrMax: String(overallMax ?? 250),
+  });
+  const payload = await dataCenterFetch(`/DataCenter/TeamColorPlayerList?${form.toString()}`, trace, {
+    headers: {
+      Accept: "application/json,text/plain,*/*",
+      Referer: `${DATA_CENTER}/datacenter/teamcolor`,
+      "X-Requested-With": "XMLHttpRequest",
+    },
+  }, env);
+  if (!/"players"\s*:/.test(payload)) throw new ApiError(502, "팀컬러 적용 선수 목록을 해석하지 못했습니다.", "TEAM_COLOR_PLAYERS_INVALID", "data-center");
+  return parseTeamColorPlayerIds(payload);
+}
+
+function playerFilterMetadata(meta: Metadata, teamColors: Array<{ id: number; name: string; level: number }>) {
   return {
+    teamColors,
     seasons: [...meta.seasons.entries()].map(([id, name]) => ({ id, name, imageUrl: meta.seasonImages.get(id) ?? "" })).sort((a, b) => b.id - a.id),
     positions: Object.keys(SEARCH_POSITIONS),
     abilities: SEARCH_ABILITIES,
@@ -333,6 +373,7 @@ function playerFilterMetadata(meta: Metadata) {
 async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env: Env, trace: RequestTrace) {
   const rawQuery = (url.searchParams.get("q") ?? "").trim();
   const query = rawQuery.toLocaleLowerCase("ko-KR");
+  const teamColorId = numberParam(url, "teamColorId", 1, 999_999);
   const seasons = listParam(url, "seasonIds").map(Number).filter(Number.isInteger);
   const positions = listParam(url, "positions").filter(value => value.toUpperCase() in SEARCH_POSITIONS);
   const grade = numberParam(url, "grade", 1, 13) ?? 1;
@@ -352,18 +393,22 @@ async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env:
   }).filter(row => SEARCH_ABILITIES.includes(row.label));
   const sort = url.searchParams.get("sort") ?? "overall-desc";
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 30), 1), 40);
-  const hasCondition = seasons.length || positions.length || [overallMin, overallMax, salaryMin, salaryMax, heightMin, heightMax, weightMin, weightMax, weakFootMin, weakFootMax, skillMovesMin, skillMovesMax].some(value => value !== undefined) || bodyTypes.length || preferredFoot || nation || includeTraits.length || excludeTraits.length || abilityFilters.length;
+  const hasCondition = teamColorId !== undefined || seasons.length || positions.length || [overallMin, overallMax, salaryMin, salaryMax, heightMin, heightMax, weightMin, weightMax, weakFootMin, weakFootMax, skillMovesMin, skillMovesMax].some(value => value !== undefined) || bodyTypes.length || preferredFoot || nation || includeTraits.length || excludeTraits.length || abilityFilters.length;
   if ((!query && !hasCondition) || rawQuery.length > 40) throw new ApiError(400, "선수명 또는 검색 조건을 입력해 주세요.", "INVALID_PLAYER_QUERY");
   const meta = await loadMetadata();
   let candidateIds: number[] = [];
-  try {
-    candidateIds = await dataCenterPlayerIds(rawQuery, seasons, positions, env, trace, salaryMin, salaryMax, overallMin, overallMax);
-  } catch {
-    candidateIds = [];
+  if (teamColorId !== undefined) {
+    candidateIds = await dataCenterTeamColorPlayerIds(teamColorId, rawQuery, seasons, positions, env, trace, salaryMin, salaryMax, overallMin, overallMax);
+  } else {
+    try {
+      candidateIds = await dataCenterPlayerIds(rawQuery, seasons, positions, env, trace, salaryMin, salaryMax, overallMin, overallMax);
+    } catch {
+      candidateIds = [];
+    }
   }
   const candidateSet = new Set(candidateIds);
   const baseRows = [...meta.players.entries()]
-    .filter(([spId, name]) => (candidateSet.size ? candidateSet.has(spId) : Boolean(query) && name.toLocaleLowerCase("ko-KR").includes(query)) && (!seasons.length || seasons.includes(Math.floor(spId / 1_000_000))))
+    .filter(([spId, name]) => (teamColorId !== undefined ? candidateSet.has(spId) : candidateSet.size ? candidateSet.has(spId) : Boolean(query) && name.toLocaleLowerCase("ko-KR").includes(query)) && (!seasons.length || seasons.includes(Math.floor(spId / 1_000_000))))
     .map(([spId, name]) => {
       const cardSeasonId = Math.floor(spId / 1_000_000);
       const pid = String(spId % 1_000_000);
@@ -617,7 +662,7 @@ export default {
             const result = isPlayerSearch
               ? await searchPlayers(url, cache, ctx, env, trace)
               : isPlayerFilters
-                ? playerFilterMetadata(await loadMetadata())
+                ? await Promise.all([loadMetadata(), loadTeamColorCatalog(env, trace)]).then(([meta, teamColors]) => playerFilterMetadata(meta, teamColors))
                 : isPlayerDetail
                   ? await playerDetail(url, env, trace)
                   : await dashboard(url, env, trace);
