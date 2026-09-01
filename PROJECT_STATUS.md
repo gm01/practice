@@ -3,8 +3,8 @@
 > 저장소: `https://github.com/gm01/practice.git`
 
 <!-- AUTO_STATUS_START -->
-- 마지막 자동 동기화: `2026-09-01 14:16:00 KST`
-- 동기화 이벤트: `API 배포`
+- 마지막 자동 동기화: `2026-09-01 14:19:30 KST`
+- 동기화 이벤트: `커밋`
 - 작업 브랜치: `codex/fconline-dashboard-improvements`
 - 문서 기준: 이 파일이 포함된 최신 Git 커밋 (정확한 해시는 `git log -1 -- PROJECT_STATUS.md`로 확인)
 - 운영 API: `https://fc-online-lab-api.bebebe97.workers.dev`

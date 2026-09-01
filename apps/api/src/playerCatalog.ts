@@ -35,6 +35,11 @@ type StateRow = {
 const CHUNK_SIZE = 100;
 const STALE_AFTER_MS = 48 * 60 * 60 * 1000;
 
+export function detectNewCatalogIds(previousHash: string | undefined, nextHash: string, rows: Array<{ id: number }>, existingIds: Set<number>) {
+  if (!previousHash || previousHash === nextHash) return [];
+  return rows.filter(row => !existingIds.has(row.id)).map(row => row.id);
+}
+
 function chunks<T>(rows: T[], size = CHUNK_SIZE) {
   const result: T[][] = [];
   for (let index = 0; index < rows.length; index += size) result.push(rows.slice(index, index + size));
@@ -84,10 +89,12 @@ export async function syncCatalogSnapshot(db: D1Database, snapshot: CatalogSnaps
   for (const group of groups) currentStates.set(group.key, await state(db, group.key));
   const hadPlayers = Boolean(currentStates.get("players"));
   const hadSeasons = Boolean(currentStates.get("seasons"));
-  const playerIds = !hadPlayers || currentStates.get("players")?.content_hash === hashes.get("players") ? new Set<number>() : await existingIds(db, "players", "sp_id");
-  const seasonIds = !hadSeasons || currentStates.get("seasons")?.content_hash === hashes.get("seasons") ? new Set<number>() : await existingIds(db, "seasons", "season_id");
-  const newPlayerIds = hadPlayers ? snapshot.players.filter(row => !playerIds.has(row.id)).map(row => row.id) : [];
-  const newSeasonIds = hadSeasons ? snapshot.seasons.filter(row => !seasonIds.has(row.id)).map(row => row.id) : [];
+  const playersChanged = currentStates.get("players")?.content_hash !== hashes.get("players");
+  const seasonsChanged = currentStates.get("seasons")?.content_hash !== hashes.get("seasons");
+  const playerIds = hadPlayers && playersChanged ? await existingIds(db, "players", "sp_id") : new Set<number>();
+  const seasonIds = hadSeasons && seasonsChanged ? await existingIds(db, "seasons", "season_id") : new Set<number>();
+  const newPlayerIds = detectNewCatalogIds(currentStates.get("players")?.content_hash, hashes.get("players") ?? "", snapshot.players, playerIds);
+  const newSeasonIds = detectNewCatalogIds(currentStates.get("seasons")?.content_hash, hashes.get("seasons") ?? "", snapshot.seasons, seasonIds);
 
   if (currentStates.get("players")?.content_hash !== hashes.get("players")) {
     await batch(db, snapshot.players.map(row => db.prepare(`INSERT INTO players (sp_id, name, name_search, season_id, first_seen_at, updated_at)
