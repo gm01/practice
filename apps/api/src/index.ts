@@ -458,7 +458,7 @@ async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env:
   const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("page") ?? 1)), 1), 1_000);
   const pageSize = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("pageSize") ?? url.searchParams.get("limit") ?? 30)), 1), 40);
   const offset = (page - 1) * pageSize;
-  const candidateLimit = Math.min(100, Math.max(playerSearchCandidateLimit(pageSize), page * pageSize * 2));
+  const candidateLimit = playerSearchCandidateLimit(40);
   const hasCondition = teamColorId !== undefined || seasons.length || positions.length || [overallMin, overallMax, salaryMin, salaryMax, heightMin, heightMax, weightMin, weightMax, weakFootMin, weakFootMax, skillMovesMin, skillMovesMax].some(value => value !== undefined) || bodyTypes.length || preferredFoot || nation || includeTraits.length || excludeTraits.length || abilityFilters.length;
   if ((!query && !hasCondition) || rawQuery.length > 40) throw new ApiError(400, "선수명 또는 검색 조건을 입력해 주세요.", "INVALID_PLAYER_QUERY");
   const meta = await loadMetadata(env);
