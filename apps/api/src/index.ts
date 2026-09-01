@@ -748,6 +748,10 @@ export default {
             throw new ApiError(429, "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", "RATE_LIMITED", "client");
           }
 
+          if ((isPlayerSearch || isPlayerFilters) && env.PLAYER_DB) {
+            ctx.waitUntil(playerCatalogStatus(env).then(status => status.stale ? refreshPlayerCatalog(env, trace) : null).catch(() => null));
+          }
+
           const cache = await caches.open("fc-online-lab-api");
           const cacheUrl = new URL(url);
           cacheUrl.searchParams.sort();
@@ -756,9 +760,6 @@ export default {
           if (cached) {
             response = new Response(cached.body, { status: cached.status, headers: { ...Object.fromEntries(cached.headers), ...corsHeaders(request, env), "X-Cache": "HIT" } });
           } else {
-            if ((isPlayerSearch || isPlayerFilters) && env.PLAYER_DB) {
-              ctx.waitUntil(playerCatalogStatus(env).then(status => status.stale ? refreshPlayerCatalog(env, trace) : null).catch(() => null));
-            }
             const result = isCatalogStatus
               ? await playerCatalogStatus(env)
               : isPlayerSearch

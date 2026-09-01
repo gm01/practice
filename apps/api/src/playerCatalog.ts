@@ -152,14 +152,15 @@ export async function catalogStatus(db: D1Database, source: PlayerCatalogStatus[
   const rows = await db.prepare("SELECT * FROM catalog_state WHERE catalog_key IN ('players','seasons','team_colors')").all<StateRow>();
   const states = new Map((rows.results ?? []).map(row => [row.catalog_key, row]));
   const player = states.get("players"), season = states.get("seasons"), teamColor = states.get("team_colors");
-  const updatedAt = [player?.last_success_at, season?.last_success_at, teamColor?.last_success_at].filter(Boolean).sort().at(0) ?? null;
+  const complete = Boolean(player?.last_success_at && season?.last_success_at && teamColor?.last_success_at);
+  const updatedAt = complete ? [player?.last_success_at, season?.last_success_at, teamColor?.last_success_at].filter(Boolean).sort().at(0) ?? null : null;
   const checkedAt = [player?.last_checked_at, season?.last_checked_at, teamColor?.last_checked_at].filter(Boolean).sort().at(-1) ?? null;
   const newSeasons = (() => { try { return JSON.parse(season?.new_items_json ?? "[]") as number[]; } catch { return []; } })();
   return {
     updatedAt,
     checkedAt,
     source,
-    stale: !updatedAt || Date.now() - Date.parse(updatedAt) > STALE_AFTER_MS,
+    stale: !complete || !updatedAt || Date.now() - Date.parse(updatedAt) > STALE_AFTER_MS,
     playerCount: Number(player?.item_count ?? 0),
     seasonCount: Number(season?.item_count ?? 0),
     teamColorCount: Number(teamColor?.item_count ?? 0),
