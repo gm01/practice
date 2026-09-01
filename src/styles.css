@@ -142,6 +142,7 @@ button:focus-visible,input:focus-visible,select:focus-visible { outline:2px soli
 .db-results-heading{min-height:1px;display:flex;align-items:center;justify-content:space-between;margin:12px 0;scroll-margin-top:20px}
 .db-results-heading b,.db-results-heading small{display:block}.db-results-heading small{margin-top:4px;color:#71847a;font-size:8px}
 .db-results-heading button{padding:7px 10px;color:#8dffb1;border:1px solid #8dffb133;border-radius:4px;background:#0c1912}
+.db-result{content-visibility:auto;contain-intrinsic-size:96px}.db-load-more{display:block;margin:18px auto 0;padding:11px 22px;color:#07110d;border:0;border-radius:5px;background:#8dffb1;font-weight:900}.db-load-more:disabled{opacity:.55}.db-catalog-time{margin:14px 0 0;color:#71847a;font-size:8px;text-align:center}
 .db-overall i{margin-left:5px;color:#71847a;font-size:7px;font-style:normal}
 .db-abilities{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}
 .db-ability-column{display:grid;align-content:start;gap:5px}

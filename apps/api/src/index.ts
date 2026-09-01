@@ -18,6 +18,18 @@ import {
 } from "./dataCenterParser";
 import { loadCachedPlayerFacts } from "./playerFactCache";
 import {
+  catalogStatus,
+  loadPlayerFacts,
+  loadStoredMetadata,
+  loadStoredTeamColors,
+  markCatalogSyncFailure,
+  savePlayerFacts,
+  saveTeamColorPlayers,
+  storedPlayerIds,
+  syncCatalogSnapshot,
+  type CatalogSnapshot,
+} from "./playerCatalog";
+import {
   playerSearchCandidateLimit,
 } from "./playerSearchPolicy";
 import { checkRateLimits, type RateLimiterBinding } from "./runtimeProtection";
@@ -59,6 +71,7 @@ interface Env extends ObservabilityEnv {
   API_ACCESS_POLICY: string;
   API_RATE_LIMITER: RateLimiterBinding;
   EXPENSIVE_RATE_LIMITER: RateLimiterBinding;
+  PLAYER_DB?: D1Database;
 }
 
 type Json = Record<string, unknown>;
@@ -72,6 +85,8 @@ type Metadata = {
 
 let metadataCache: Promise<Metadata> | null = null;
 let teamColorCatalogCache: Promise<Array<{ id: number; name: string; level: number }>> | null = null;
+let storedMetadataCache: Promise<Metadata | null> | null = null;
+let storedTeamColorCatalogCache: Promise<Array<{ id: number; name: string; level: number }>> | null = null;
 
 function json(request: Request, env: Env, body: unknown, status = 200, extra: HeadersInit = {}) {
   return new Response(JSON.stringify(body), {
@@ -123,7 +138,7 @@ async function nexon<T>(path: string, env: Env, trace: RequestTrace, params: Rec
   throw new ApiError(502, lastError, lastCode, "nexon", { upstreamStatus, stage: path });
 }
 
-async function loadMetadata(): Promise<Metadata> {
+async function loadLiveMetadata(): Promise<Metadata> {
   if (!metadataCache) metadataCache = Promise.all([
     fetch(`${META}/spid.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ id: number; name: string }>>,
     fetch(`${META}/spposition.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ spposition: number; desc: string }>>,
@@ -140,6 +155,15 @@ async function loadMetadata(): Promise<Metadata> {
     throw error;
   });
   return metadataCache;
+}
+
+async function loadMetadata(env?: Env): Promise<Metadata> {
+  if (env?.PLAYER_DB) {
+    if (!storedMetadataCache) storedMetadataCache = loadStoredMetadata(env.PLAYER_DB).catch(() => null);
+    const stored = await storedMetadataCache;
+    if (stored) return stored;
+  }
+  return loadLiveMetadata();
 }
 
 function matchMinute(raw: number) {
@@ -265,7 +289,7 @@ async function dashboard(url: URL, env: Env, trace: RequestTrace) {
     nexon<{ ouid: string; nickname: string; level: number }>("/user/basic", env, trace, { ouid: identity.ouid }),
     nexon<Array<{ matchType: number; division: number }>>("/user/maxdivision", env, trace, { ouid: identity.ouid }),
     nexon<string[]>("/user/match", env, trace, { ouid: identity.ouid, matchtype: matchType, offset, limit }),
-    loadMetadata(),
+    loadMetadata(env),
   ]);
 
   const matches: unknown[] = [];
@@ -324,7 +348,7 @@ async function dataCenterPlayerIds(query: string, seasons: number[], positions: 
   return [...new Set(ids)].slice(0, 100);
 }
 
-async function loadTeamColorCatalog(env: Env, trace: RequestTrace) {
+async function loadLiveTeamColorCatalog(env: Env, trace: RequestTrace) {
   if (!teamColorCatalogCache) teamColorCatalogCache = dataCenterFetch("/datacenter/teamcolor", trace, undefined, env)
     .then(html => {
       const rows = parseTeamColorCatalog(html);
@@ -336,6 +360,44 @@ async function loadTeamColorCatalog(env: Env, trace: RequestTrace) {
       throw error;
     });
   return teamColorCatalogCache;
+}
+
+async function loadTeamColorCatalog(env: Env, trace: RequestTrace) {
+  if (env.PLAYER_DB) {
+    if (!storedTeamColorCatalogCache) storedTeamColorCatalogCache = loadStoredTeamColors(env.PLAYER_DB).catch(() => []);
+    const stored = await storedTeamColorCatalogCache;
+    if (stored.length) return stored;
+  }
+  return loadLiveTeamColorCatalog(env, trace);
+}
+
+async function refreshPlayerCatalog(env: Env, trace: RequestTrace) {
+  if (!env.PLAYER_DB) return null;
+  try {
+    const [meta, teamColors] = await Promise.all([loadLiveMetadata(), loadLiveTeamColorCatalog(env, trace)]);
+    const snapshot: CatalogSnapshot = {
+      players: [...meta.players].map(([id, name]) => ({ id, name })),
+      positions: [...meta.positions].map(([id, name]) => ({ id, name })),
+      divisions: [...meta.divisions].map(([id, name]) => ({ id, name })),
+      seasons: [...meta.seasons].map(([id, name]) => ({ id, name, imageUrl: meta.seasonImages.get(id) ?? "" })),
+      teamColors,
+    };
+    const result = await syncCatalogSnapshot(env.PLAYER_DB, snapshot);
+    storedMetadataCache = Promise.resolve(meta);
+    storedTeamColorCatalogCache = Promise.resolve(teamColors);
+    return result;
+  } catch (error) {
+    await markCatalogSyncFailure(env.PLAYER_DB, error).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function playerCatalogStatus(env: Env, source: "d1" | "live" | "fallback" = "d1") {
+  if (env.PLAYER_DB) return catalogStatus(env.PLAYER_DB, source);
+  return {
+    updatedAt: null, checkedAt: null, source: "live" as const, stale: true,
+    playerCount: 0, seasonCount: 0, teamColorCount: 0, newSeasonIds: [], newPlayerCount: 0,
+  };
 }
 
 async function dataCenterTeamColorPlayerIds(teamColorId: number, query: string, seasons: number[], positions: string[], env: Env, trace: RequestTrace, salaryMin?: number, salaryMax?: number, overallMin?: number, overallMax?: number) {
@@ -360,13 +422,14 @@ async function dataCenterTeamColorPlayerIds(teamColorId: number, query: string, 
   return parseTeamColorPlayerIds(payload);
 }
 
-function playerFilterMetadata(meta: Metadata, teamColors: Array<{ id: number; name: string; level: number }>) {
+async function playerFilterMetadata(meta: Metadata, teamColors: Array<{ id: number; name: string; level: number }>, env: Env) {
   return {
     teamColors,
     seasons: [...meta.seasons.entries()].map(([id, name]) => ({ id, name, imageUrl: meta.seasonImages.get(id) ?? "" })).sort((a, b) => b.id - a.id),
     positions: Object.keys(SEARCH_POSITIONS),
     abilities: SEARCH_ABILITIES,
     bodyTypes: ["마름", "보통", "건장"],
+    catalog: await playerCatalogStatus(env),
   };
 }
 
@@ -392,18 +455,32 @@ async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env:
     return { label, min: Number(min) || undefined, max: Number(max) || undefined };
   }).filter(row => SEARCH_ABILITIES.includes(row.label));
   const sort = url.searchParams.get("sort") ?? "overall-desc";
-  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 30), 1), 40);
+  const page = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("page") ?? 1)), 1), 1_000);
+  const pageSize = Math.min(Math.max(Math.trunc(Number(url.searchParams.get("pageSize") ?? url.searchParams.get("limit") ?? 30)), 1), 40);
+  const offset = (page - 1) * pageSize;
+  const candidateLimit = Math.min(100, Math.max(playerSearchCandidateLimit(pageSize), page * pageSize * 2));
   const hasCondition = teamColorId !== undefined || seasons.length || positions.length || [overallMin, overallMax, salaryMin, salaryMax, heightMin, heightMax, weightMin, weightMax, weakFootMin, weakFootMax, skillMovesMin, skillMovesMax].some(value => value !== undefined) || bodyTypes.length || preferredFoot || nation || includeTraits.length || excludeTraits.length || abilityFilters.length;
   if ((!query && !hasCondition) || rawQuery.length > 40) throw new ApiError(400, "선수명 또는 검색 조건을 입력해 주세요.", "INVALID_PLAYER_QUERY");
-  const meta = await loadMetadata();
+  const meta = await loadMetadata(env);
   let candidateIds: number[] = [];
-  if (teamColorId !== undefined) {
-    candidateIds = await dataCenterTeamColorPlayerIds(teamColorId, rawQuery, seasons, positions, env, trace, salaryMin, salaryMax, overallMin, overallMax);
-  } else {
-    try {
+  let degraded = false;
+  let storedCandidatesPaged = false;
+  let candidateTotal = 0;
+  try {
+    if (teamColorId !== undefined) {
+      candidateIds = await dataCenterTeamColorPlayerIds(teamColorId, rawQuery, seasons, positions, env, trace, salaryMin, salaryMax, overallMin, overallMax);
+      if (env.PLAYER_DB) ctx.waitUntil(saveTeamColorPlayers(env.PLAYER_DB, teamColorId, candidateIds));
+    } else {
       candidateIds = await dataCenterPlayerIds(rawQuery, seasons, positions, env, trace, salaryMin, salaryMax, overallMin, overallMax);
-    } catch {
-      candidateIds = [];
+    }
+    candidateTotal = candidateIds.length;
+  } catch {
+    degraded = true;
+    if (env.PLAYER_DB) {
+      const stored = await storedPlayerIds(env.PLAYER_DB, { query: rawQuery, seasons, teamColorId, offset, limit: Math.min(100, pageSize * 2) });
+      candidateIds = stored.ids;
+      candidateTotal = stored.total;
+      storedCandidatesPaged = true;
     }
   }
   const candidateSet = new Set(candidateIds);
@@ -426,21 +503,27 @@ async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env:
       };
     })
     .sort((a, b) => Number(b.name.toLocaleLowerCase("ko-KR") === query) - Number(a.name.toLocaleLowerCase("ko-KR") === query) || Number(b.name.toLocaleLowerCase("ko-KR").startsWith(query)) - Number(a.name.toLocaleLowerCase("ko-KR").startsWith(query)) || b.seasonId - a.seasonId)
-    .slice(0, playerSearchCandidateLimit(limit));
+    .slice(0, candidateLimit);
   const rows: Array<(typeof baseRows)[number] & Awaited<ReturnType<typeof playerSearchFacts>>> = [];
   for (let index = 0; index < baseRows.length; index += 8) {
     const batch = baseRows.slice(index, index + 8);
-    const facts = await Promise.allSettled(batch.map(card => loadCachedPlayerFacts(
-      card.spId,
-      grade,
-      cache,
-      ctx,
-      () => playerSearchFacts(card.spId, grade, env, trace),
-    )));
-    batch.forEach((card, batchIndex) => rows.push({
-      ...card,
-      ...(facts[batchIndex]?.status === "fulfilled" ? facts[batchIndex].value : emptyPlayerSearchFacts(grade)),
+    const facts = await Promise.allSettled(batch.map(async card => {
+      try {
+        const live = await loadCachedPlayerFacts(card.spId, grade, cache, ctx, () => playerSearchFacts(card.spId, grade, env, trace));
+        if (env.PLAYER_DB) ctx.waitUntil(savePlayerFacts(env.PLAYER_DB, card.spId, grade, live));
+        return live;
+      } catch (error) {
+        if (env.PLAYER_DB) {
+          const stored = await loadPlayerFacts<Awaited<ReturnType<typeof playerSearchFacts>>>(env.PLAYER_DB, card.spId, grade);
+          if (stored) { degraded = true; return stored; }
+        }
+        throw error;
+      }
     }));
+    batch.forEach((card, batchIndex) => {
+      if (facts[batchIndex]?.status !== "fulfilled") degraded = true;
+      rows.push({ ...card, ...(facts[batchIndex]?.status === "fulfilled" ? facts[batchIndex].value : emptyPlayerSearchFacts(grade)) });
+    });
   }
   const filtered = rows.filter(row => {
     const traits = row.traits.map(value => value.toLocaleLowerCase("ko-KR"));
@@ -460,8 +543,21 @@ async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env:
       && abilityFilters.every(filter => { const value = abilityMap.get(filter.label) ?? 0; return (filter.min === undefined || value >= filter.min) && (filter.max === undefined || value <= filter.max); });
   });
   filtered.sort((a, b) => sort === "overall-asc" ? a.overall - b.overall : sort === "salary-desc" ? b.salary - a.salary : sort === "salary-asc" ? a.salary - b.salary : sort === "name-asc" ? a.name.localeCompare(b.name, "ko-KR") : b.overall - a.overall || b.seasonId - a.seasonId || a.name.localeCompare(b.name, "ko-KR"));
-  const players = filtered.slice(0, limit);
-  return { query: rawQuery, count: players.length, players, source: "NEXON Open API metadata / EA SPORTS FC ONLINE Data Center" };
+  const pageOffset = storedCandidatesPaged ? 0 : offset;
+  const players = filtered.slice(pageOffset, pageOffset + pageSize);
+  const total = degraded && candidateTotal > filtered.length ? candidateTotal : filtered.length;
+  return {
+    query: rawQuery,
+    page,
+    pageSize,
+    total,
+    count: players.length,
+    hasMore: offset + players.length < total && players.length > 0,
+    players,
+    catalog: await playerCatalogStatus(env, degraded ? "fallback" : "d1"),
+    degraded,
+    source: degraded ? "Cloudflare D1 저장 데이터 / NEXON Open API metadata" : "NEXON Open API metadata / EA SPORTS FC ONLINE Data Center",
+  };
 }
 
 async function dataCenterFetch(path: string, trace: RequestTrace, init?: RequestInit, env?: Env) {
@@ -552,7 +648,7 @@ async function playerDetail(url: URL, env: Env, trace: RequestTrace) {
   const hasModifiers = grow > 0 || affiliationId > 0 || enhancementId > 0 || featureId > 0;
   const [pageHtml, baseAbilityHtml, priceHtml, meta] = await Promise.all([
     dataCenterFetch(detailPath, trace, undefined, env), dataCenterFetch("/datacenter/PlayerAbility", trace, post(baseForm.toString()), env),
-    dataCenterFetch("/datacenter/PlayerPriceGraph", trace, post(new URLSearchParams({ spid: String(spId), n1strong: String(grade) }).toString()), env), loadMetadata(),
+    dataCenterFetch("/datacenter/PlayerPriceGraph", trace, post(new URLSearchParams({ spid: String(spId), n1strong: String(grade) }).toString()), env), loadMetadata(env),
   ]);
   const seasonId = Math.floor(spId / 1_000_000);
   const seasonName = meta.seasons.get(seasonId) ?? "시즌 정보 없음";
@@ -646,7 +742,8 @@ export default {
           const isPlayerSearch = url.pathname === "/v1/players/search";
           const isPlayerFilters = url.pathname === "/v1/players/filters";
           const isPlayerDetail = url.pathname === "/v1/players/detail";
-          if (!isDashboard && !isPlayerSearch && !isPlayerFilters && !isPlayerDetail) throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND", "client");
+          const isCatalogStatus = url.pathname === "/v1/catalog/status";
+          if (!isDashboard && !isPlayerSearch && !isPlayerFilters && !isPlayerDetail && !isCatalogStatus) throw new ApiError(404, "요청한 API를 찾을 수 없습니다.", "NOT_FOUND", "client");
           if (await checkRateLimits(request, url.pathname, env.API_RATE_LIMITER, env.EXPENSIVE_RATE_LIMITER) !== "allowed") {
             throw new ApiError(429, "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.", "RATE_LIMITED", "client");
           }
@@ -659,10 +756,15 @@ export default {
           if (cached) {
             response = new Response(cached.body, { status: cached.status, headers: { ...Object.fromEntries(cached.headers), ...corsHeaders(request, env), "X-Cache": "HIT" } });
           } else {
-            const result = isPlayerSearch
+            if ((isPlayerSearch || isPlayerFilters) && env.PLAYER_DB) {
+              ctx.waitUntil(playerCatalogStatus(env).then(status => status.stale ? refreshPlayerCatalog(env, trace) : null).catch(() => null));
+            }
+            const result = isCatalogStatus
+              ? await playerCatalogStatus(env)
+              : isPlayerSearch
               ? await searchPlayers(url, cache, ctx, env, trace)
               : isPlayerFilters
-                ? await Promise.all([loadMetadata(), loadTeamColorCatalog(env, trace)]).then(([meta, teamColors]) => playerFilterMetadata(meta, teamColors))
+                ? await Promise.all([loadMetadata(env), loadTeamColorCatalog(env, trace)]).then(([meta, teamColors]) => playerFilterMetadata(meta, teamColors, env))
                 : isPlayerDetail
                   ? await playerDetail(url, env, trace)
                   : await dashboard(url, env, trace);
@@ -686,5 +788,10 @@ export default {
     response = new Response(response.body, { status: response.status, statusText: response.statusText, headers });
     recordRequest(env, trace, response.status, response.headers.get("X-Cache") ?? "NONE", observedError);
     return response;
+  },
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    const request = new Request("https://fc-online-lab-api.invalid/scheduled/player-catalog", { headers: { "User-Agent": "cloudflare-cron" } });
+    const trace = createRequestTrace(request, env, "/scheduled/player-catalog");
+    ctx.waitUntil(refreshPlayerCatalog(env, trace));
   },
 } satisfies ExportedHandler<Env>;

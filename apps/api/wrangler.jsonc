@@ -4,6 +4,17 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-27",
   "workers_dev": true,
+  "triggers": {
+    "crons": ["0 18 * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "PLAYER_DB",
+      "database_name": "fc-online-lab-player-catalog",
+      "database_id": "c6f15dfa-5761-4e9d-8040-57babef8d184",
+      "migrations_dir": "migrations"
+    }
+  ],
   "observability": {
     "enabled": true
   },

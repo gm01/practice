@@ -3,8 +3,8 @@
 > 저장소: `https://github.com/gm01/practice.git`
 
 <!-- AUTO_STATUS_START -->
-- 마지막 자동 동기화: `2026-09-01 10:03:29 KST`
-- 동기화 이벤트: `API 배포`
+- 마지막 자동 동기화: `2026-09-01 14:13:19 KST`
+- 동기화 이벤트: `커밋`
 - 작업 브랜치: `codex/fconline-dashboard-improvements`
 - 문서 기준: 이 파일이 포함된 최신 Git 커밋 (정확한 해시는 `git log -1 -- PROJECT_STATUS.md`로 확인)
 - 운영 API: `https://fc-online-lab-api.bebebe97.workers.dev`
@@ -61,14 +61,14 @@ FC04/
 │       │   ├── playerFactCache.ts
 │       │   ├── playerSearchPolicy.ts
 │       │   └── runtimeProtection.ts
+│       ├── migrations/       D1 선수 카탈로그 스키마
+│       ├── scripts/          공식 메타데이터 초기 적재 도구
 │       └── wrangler.jsonc
 ├── shared/                 데스크톱 공통 NEXON 변환 로직과 테스트
 ├── PRIVACY.md
 ├── RELEASE_CHECKLIST.md
 └── PROJECT_STATUS.md
 ```
-
-`bali-travel-notebook/`이 로컬에 보일 수 있으나 FC Online Lab과 무관한 미추적 폴더다. FC Online 커밋에 포함하지 않는다.
 
 ## 3. 구현 완료 기능
 
@@ -128,6 +128,11 @@ FC04/
 - 적응도·강화·소속·관계/특성 팀컬러 적용
 - 선수 즐겨찾기
 - 시즌 아이콘을 사진 원형 마스크와 분리해 잘림 방지
+- Cloudflare D1 선수 기본 정보 88,246장·시즌 152개 초기 저장
+- 검색 결과 페이지 처리 및 모바일 가상 목록 적용
+- 데이터센터 장애 시 D1 선수 기본 정보와 저장된 상세 능력치로 대체 조회
+- 선수·시즌·팀컬러 매일 03:00 KST 자동 동기화
+- 마지막 데이터 갱신 시각과 신규 시즌·선수 자동 감지 상태 제공
 
 ### 선수 비교
 
@@ -175,8 +180,10 @@ Cloudflare Worker는 다음 경로를 제공한다.
 | `GET /` | 서비스 상태 | 없음 |
 | `GET /health` | 상태 확인 | 없음 |
 | `GET /v1/dashboard` | 구단주 프로필·최근 경기 | `nickname`, `matchtype`, `offset`, `limit` |
-| `GET /v1/players/search` | 선수 시즌 카드 검색 | `q`, `seasonId`, `limit` |
+| `GET /v1/players/search` | 선수 시즌 카드 검색 | `q`, `seasonIds`, `page`, `pageSize`, 상세 조건 |
+| `GET /v1/players/filters` | 시즌·포지션·팀컬러 검색 조건 | 없음 |
 | `GET /v1/players/detail` | 선수 상세·팀컬러 적용 | `spid`, `grade`, `adaptation`, 팀컬러 ID |
+| `GET /v1/catalog/status` | D1 동기화·신규 시즌 상태 | 없음 |
 | `POST /v1/telemetry/client-error` | 익명 클라이언트 오류 수집 | JSON 오류 이벤트 |
 
 모바일 기본 API 주소는 `apps/mobile/src/api.ts`에 운영 Worker 주소로 설정되어 있다. 필요하면 `EXPO_PUBLIC_API_BASE_URL` 환경변수로 변경할 수 있다.
@@ -187,6 +194,10 @@ Cloudflare Worker는 다음 경로를 제공한다.
 - 선수 이미지와 시즌 아이콘은 공식 데이터센터 리소스 URL 사용
 - 세부 능력치·시세·클럽 경력·팀컬러 선택지는 EA SPORTS FC ONLINE 데이터센터 응답을 파싱
 - 공식 데이터센터 HTML 구조가 바뀌면 `apps/api/src/index.ts`의 상세 파서가 깨질 수 있음
+- 검색은 `page`, `pageSize`(최대 40)를 지원하고 응답에 `total`, `hasMore`, `catalog`, `degraded`를 포함
+- D1 데이터베이스: `fc-online-lab-player-catalog` (APAC), Worker binding `PLAYER_DB`
+- 정기 동기화 Cron: `0 18 * * *` UTC = 매일 03:00 KST
+- 초기 재적재가 필요하면 `apps/api`에서 `node scripts/build-catalog-seed.mjs` 실행 후 `npx wrangler d1 execute fc-online-lab-player-catalog --remote --file .catalog-seed.sql`
 - 자체 분석값을 공식 xG로 표기하지 말고 `예상 득점 확률` 또는 `슈팅 품질 지수`로 안내
 
 ## 6. 새 환경에서 시작하기

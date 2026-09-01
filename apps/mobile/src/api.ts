@@ -6,6 +6,7 @@ import type {
   PlayerDetailOptions,
   PlayerFilterMetadata,
   PlayerSearchFilters,
+  PlayerSearchResponse,
   ClientErrorEvent,
 } from "../../../shared/contracts";
 import type { DiagnosticInfo } from "../../../shared/contracts";
@@ -55,11 +56,10 @@ function appendPlayerFilters(url: URL, filters: PlayerSearchFilters) {
   }
 }
 
-export async function searchPlayers(filters: PlayerSearchFilters, signal?: AbortSignal): Promise<PlayerCard[]> {
+export async function searchPlayers(filters: PlayerSearchFilters, signal?: AbortSignal): Promise<PlayerSearchResponse> {
   const url = new URL("/v1/players/search", API);
-  appendPlayerFilters(url, { limit: 40, ...filters });
-  const body = await requestJson<{ players: PlayerCard[] }>(url, { timeoutMs: 40_000, signal, clientVersion: CLIENT_VERSION, fallbackMessage: "선수 검색에 실패했습니다.", onDiagnostics: diagnosticListener });
-  return body.players ?? [];
+  appendPlayerFilters(url, { pageSize: 30, ...filters });
+  return requestJson<PlayerSearchResponse>(url, { timeoutMs: 40_000, signal, clientVersion: CLIENT_VERSION, fallbackMessage: "선수 검색에 실패했습니다.", onDiagnostics: diagnosticListener });
 }
 
 export function fetchPlayerFilters(signal?: AbortSignal): Promise<PlayerFilterMetadata> {

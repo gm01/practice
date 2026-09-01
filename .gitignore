@@ -7,6 +7,7 @@ apps/mobile/node_modules/
 apps/api/node_modules/
 apps/api/.wrangler/
 apps/api/.dev.vars
+apps/api/.catalog-seed.sql
 *.log
 .DS_Store
 config.json

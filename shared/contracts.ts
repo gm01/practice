@@ -108,6 +108,8 @@ export type PlayerAbilityFilter = { label: string; min?: number; max?: number };
 
 export type PlayerSearchFilters = {
   query: string;
+  page?: number;
+  pageSize?: number;
   teamColorId?: number;
   seasonIds?: number[];
   positions?: string[];
@@ -134,12 +136,37 @@ export type PlayerSearchFilters = {
   limit?: number;
 };
 
+export type PlayerCatalogStatus = {
+  updatedAt: string | null;
+  checkedAt: string | null;
+  source: "d1" | "live" | "fallback";
+  stale: boolean;
+  playerCount: number;
+  seasonCount: number;
+  teamColorCount: number;
+  newSeasonIds: number[];
+  newPlayerCount: number;
+};
+
+export type PlayerSearchResponse = {
+  query: string;
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  players: PlayerCard[];
+  catalog: PlayerCatalogStatus;
+  degraded: boolean;
+  source: string;
+};
+
 export type PlayerFilterMetadata = {
   teamColors: Array<{ id: number; name: string; level: number }>;
   seasons: Array<{ id: number; name: string; imageUrl: string }>;
   positions: string[];
   abilities: string[];
   bodyTypes: string[];
+  catalog?: PlayerCatalogStatus;
 };
 
 export type PlayerDetail = {

@@ -7,6 +7,7 @@ import type {
   PlayerDetailOptions,
   PlayerFilterMetadata,
   PlayerSearchFilters,
+  PlayerSearchResponse,
   ClientErrorEvent,
   DiagnosticInfo,
 } from "../shared/contracts";
@@ -55,13 +56,12 @@ function appendPlayerFilters(url: URL, filters: PlayerSearchFilters) {
 
 export async function fetchServicePlayers(filters: PlayerSearchFilters) {
   const url = new URL("/v1/players/search", SERVICE_API);
-  appendPlayerFilters(url, { limit: 40, ...filters });
-  const body = await requestJson<{ players: PlayerCard[] }>(url, {
+  appendPlayerFilters(url, { pageSize: 30, ...filters });
+  return requestJson<PlayerSearchResponse>(url, {
     timeoutMs: 40_000,
     ...commonOptions,
     fallbackMessage: "선수 검색에 실패했습니다.",
   });
-  return body.players ?? [];
 }
 
 export function fetchServicePlayerFilters() {

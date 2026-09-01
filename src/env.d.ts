@@ -9,6 +9,8 @@ import type {
   PlayerCard as SharedPlayerCard,
   PlayerAbilityFilter as SharedPlayerAbilityFilter,
   PlayerSearchFilters as SharedPlayerSearchFilters,
+  PlayerSearchResponse as SharedPlayerSearchResponse,
+  PlayerCatalogStatus as SharedPlayerCatalogStatus,
   PlayerFilterMetadata as SharedPlayerFilterMetadata,
   PlayerDetail as SharedPlayerDetail,
   PlayerDetailOptions as SharedPlayerDetailOptions,
@@ -25,6 +27,8 @@ declare global {
   type PlayerCard = SharedPlayerCard;
   type PlayerAbilityFilter = SharedPlayerAbilityFilter;
   type PlayerSearchFilters = SharedPlayerSearchFilters;
+  type PlayerSearchResponse = SharedPlayerSearchResponse;
+  type PlayerCatalogStatus = SharedPlayerCatalogStatus;
   type PlayerFilterMetadata = SharedPlayerFilterMetadata;
   type PlayerDetail = SharedPlayerDetail;
   type PlayerDetailOptions = SharedPlayerDetailOptions;
@@ -34,7 +38,7 @@ declare global {
   interface Window {
     fcOnline: {
       fetchDashboard(input: { nickname: string; offset: number; matchType: number }): Promise<{ profile: UserProfile | null; matches: MatchSummary[]; failures: Array<{ matchId: string; message: string }>; matchTypes: Array<{ id: number; name: string }> }>;
-      searchPlayers(filters: PlayerSearchFilters): Promise<PlayerCard[]>;
+      searchPlayers(filters: PlayerSearchFilters): Promise<PlayerSearchResponse>;
       fetchPlayerFilters(): Promise<PlayerFilterMetadata>;
       fetchPlayerDetail(spId: number, grade: number, options?: PlayerDetailOptions): Promise<PlayerDetail>;
       loadSettings(): Promise<{ nickname: string }>;
