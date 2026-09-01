@@ -508,15 +508,17 @@ async function searchPlayers(url: URL, cache: Cache, ctx: ExecutionContext, env:
   for (let index = 0; index < baseRows.length; index += 8) {
     const batch = baseRows.slice(index, index + 8);
     const facts = await Promise.allSettled(batch.map(async card => {
+      if (env.PLAYER_DB) {
+        const stored = await loadPlayerFacts<Awaited<ReturnType<typeof playerSearchFacts>>>(env.PLAYER_DB, card.spId, grade);
+        if (stored) return stored;
+        if (storedCandidatesPaged) return emptyPlayerSearchFacts(grade);
+      }
       try {
         const live = await loadCachedPlayerFacts(card.spId, grade, cache, ctx, () => playerSearchFacts(card.spId, grade, env, trace));
         if (env.PLAYER_DB) ctx.waitUntil(savePlayerFacts(env.PLAYER_DB, card.spId, grade, live));
         return live;
       } catch (error) {
-        if (env.PLAYER_DB) {
-          const stored = await loadPlayerFacts<Awaited<ReturnType<typeof playerSearchFacts>>>(env.PLAYER_DB, card.spId, grade);
-          if (stored) { degraded = true; return stored; }
-        }
+        degraded = true;
         throw error;
       }
     }));
