@@ -21,6 +21,31 @@ Data based on NEXON Open API
   </tr>
 </table>
 
+### 선수 정보
+
+<table>
+  <tr>
+    <th>선수 검색</th>
+    <th>검색 결과</th>
+    <th>선수 상세·팀컬러</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/mobile-player-search.png" alt="선수명과 조건으로 검색하는 화면" width="280"></td>
+    <td><img src="docs/screenshots/mobile-player-search-results.png" alt="시즌, 포지션, 급여와 OVR을 제공하는 선수 검색 결과" width="280"></td>
+    <td><img src="docs/screenshots/mobile-player-detail.png" alt="강화 단계와 팀컬러를 설정하는 선수 상세 화면" width="280"></td>
+  </tr>
+  <tr>
+    <th>능력치·시세</th>
+    <th>포지션 OVR·집중훈련</th>
+    <th>클럽 경력</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/mobile-player-stats.png" alt="선수 능력치, 시세와 특성 화면" width="280"></td>
+    <td><img src="docs/screenshots/mobile-player-training.png" alt="포지션별 OVR과 집중훈련 화면" width="280"></td>
+    <td><img src="docs/screenshots/mobile-player-career.png" alt="선수 클럽 경력과 내 경기 기록 화면" width="280"></td>
+  </tr>
+</table>
+
 > iOS 실제 단말에서 실행한 화면입니다. Android와 iOS는 동일한 화면·데이터 코드를 공유합니다.
 
 ## 주요 기능
