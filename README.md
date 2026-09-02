@@ -1,10 +1,27 @@
 # FC Online Lab
 
-FC Online 경기 기록, 득점 흐름, 슈팅 위치, 선수 평점과 선수 정보를 확인하는 Electron 데스크톱 앱입니다.
+FC Online 경기 기록, 득점 흐름, 슈팅 위치, 선수 평점과 선수 정보를 확인하는 데스크톱·모바일 애플리케이션입니다.
 
 다른 환경에서 개발을 이어갈 때는 [PROJECT_STATUS.md](PROJECT_STATUS.md)의 현재 구조, 배포 상태와 인수인계 항목을 먼저 확인하세요.
 
 Data based on NEXON Open API
+
+## 실제 구동 화면
+
+<table>
+  <tr>
+    <th>종합 리포트</th>
+    <th>경기 상세</th>
+    <th>플레이어 리포트</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/mobile-dashboard.png" alt="최근 경기 종합 리포트 화면" width="280"></td>
+    <td><img src="docs/screenshots/mobile-match-detail.png" alt="득점 타임라인과 경기 상세 화면" width="280"></td>
+    <td><img src="docs/screenshots/mobile-player-report.png" alt="선수 누적 기록과 평점 흐름 화면" width="280"></td>
+  </tr>
+</table>
+
+> iOS 실제 단말에서 실행한 화면입니다. Android와 iOS는 동일한 화면·데이터 코드를 공유합니다.
 
 ## 주요 기능
 
