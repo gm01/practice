@@ -1,3 +1,4 @@
+import { playerSearchRequest } from "../../shared/playerSearchRequest";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -24,7 +25,7 @@ import { C, s } from "./src/styles";
 import type { Dashboard, Match, Player, Side } from "./src/types";
 import { focusedTrainingOvr, orderedAbilityColumns, recommendedFocusedTraining } from "../../shared/playerOvr";
 import { POSITION_COORDINATES, formationName, startingPlayers, substitutePlayers } from "../../shared/formation";
-import { setComparisonGrade } from "../../shared/comparison";
+import { compareAbility, setComparisonGrade } from "../../shared/comparison";
 import type { DiagnosticInfo, PlayerCatalogStatus } from "../../shared/contracts";
 import { installMobileErrorHandler, reportMobileError, setRelatedRequestId } from "./src/telemetry";
 import { resolveBackAction } from "./src/navigation";
@@ -539,7 +540,7 @@ function MatchScreen({
                 {String(a)}
                 {u}
               </Text>
-              <Text style={s.muted}>{l}</Text>
+              <Text style={s.muted}>{l??"정보 없음"}</Text>
               <Text style={s.statValue}>
                 {String(b)}
                 {u}
@@ -779,14 +780,16 @@ function TeamColorChoices({ label, value, options, onChange }: { label: string; 
 
 function MobilePlayerComparison({ cards, onClose }: { cards: [PlayerCard,PlayerCard]; onClose: () => void }) {
   const [grades,setGrades]=useState<[number,number]>([1,1]);
-  const [details,setDetails]=useState<[PlayerDetail|null,PlayerDetail|null]>([null,null]);
+  const comparisonKey=JSON.stringify([cards.map(card=>card.spId),grades]);
+  const [loadedComparison,setLoadedComparison]=useState<{key:string;values:[PlayerDetail,PlayerDetail]}|null>(null);
+  const details=loadedComparison?.key===comparisonKey?loadedComparison.values:[null,null];
   const [loading,setLoading]=useState(true),[error,setError]=useState("");
-  useEffect(()=>{let active=true;const controller=new AbortController();setLoading(true);setError("");Promise.all(cards.map((card,index)=>fetchPlayerDetail(card.spId,grades[index],{adaptation:1},controller.signal))).then(values=>{if(active)setDetails(values as [PlayerDetail,PlayerDetail])}).catch(reason=>{if(active&&reason?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 비교 정보를 불러오지 못했습니다.")}).finally(()=>{if(active)setLoading(false)});return()=>{active=false;controller.abort()}},[cards,grades]);
+  useEffect(()=>{let active=true;const controller=new AbortController();setLoading(true);setLoadedComparison(null);setError("");Promise.all(cards.map((card,index)=>fetchPlayerDetail(card.spId,grades[index],{adaptation:1},controller.signal))).then(values=>{if(active)setLoadedComparison({key:comparisonKey,values:values as [PlayerDetail,PlayerDetail]})}).catch(reason=>{if(active&&reason?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 비교 정보를 불러오지 못했습니다.")}).finally(()=>{if(active)setLoading(false)});return()=>{active=false;controller.abort()}},[cards,grades]);
   const [left,right]=details;
   const labels=left&&right?[...new Set([...left.abilities.map(row=>row.label),...right.abilities.map(row=>row.label)])]:[];
-  const ability=(detail:PlayerDetail,label:string)=>detail.abilities.find(row=>row.label===label)?.value??0;
+  const ability=(detail:PlayerDetail,label:string)=>detail.abilities.find(row=>row.label===label)?.value;
   const changeGrade=(index:0|1,delta:number)=>setGrades(current=>setComparisonGrade(current,index,current[index]+delta));
-  return <View style={s.comparePanel}><View style={s.compareHeading}><View><Text style={s.eyebrow}>PLAYER COMPARISON</Text><Text style={s.headingCompact}>선수 비교</Text></View><Pressable onPress={onClose} accessibilityLabel="선수 비교 닫기"><Text style={s.compareClose}>×</Text></Pressable></View><View style={s.compareHeroes}>{cards.map((card,index)=><View style={s.compareHero} key={card.spId}><CardImage card={card} size={72} seasonImageUrl={card.seasonImageUrl}/><Text style={s.playerName} numberOfLines={2}>{card.name}</Text><Text style={s.muted} numberOfLines={1}>{card.seasonName}</Text><Text style={s.dbMeta}>{card.primaryPosition} · 급여 {card.salary||"-"}</Text><FootRatings right={card.rightFoot} left={card.leftFoot}/><View style={s.compareGrade}><Pressable onPress={()=>changeGrade(index as 0|1,-1)}><Text style={s.compareGradeButton}>−</Text></Pressable><Text style={s.compareGradeValue}>{grades[index]}강</Text><Pressable onPress={()=>changeGrade(index as 0|1,1)}><Text style={s.compareGradeButton}>＋</Text></Pressable></View></View>)}</View>{loading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>두 선수의 능력치를 비교하는 중…</Text></View>}{!!error&&<Text style={s.error}>{error}</Text>}{left&&right&&<View style={s.compareTable}><View style={s.compareOverall}><Text style={[s.compareOverallValue,{color:statColor(left.overall)}]}>{left.overall}</Text><Text style={s.compareLabel}>OVR</Text><Text style={[s.compareOverallValue,{color:statColor(right.overall)}]}>{right.overall}</Text></View>{labels.map(label=>{const l=ability(left,label),r=ability(right,label);return <View style={s.compareRow} key={label}><View style={s.compareStat}><Text style={[s.compareStatValue,l>r&&s.compareWinner]}>{l}</Text><Text style={s.compareDelta}>{l===r?"–":l>r?`+${l-r}`:`-${r-l}`}</Text></View><Text style={s.compareLabel}>{label}</Text><View style={s.compareStat}><Text style={[s.compareStatValue,r>l&&s.compareWinner]}>{r}</Text><Text style={s.compareDelta}>{l===r?"–":r>l?`+${r-l}`:`-${l-r}`}</Text></View></View>})}</View>}</View>;
+  return <View style={s.comparePanel}><View style={s.compareHeading}><View><Text style={s.eyebrow}>PLAYER COMPARISON</Text><Text style={s.headingCompact}>선수 비교</Text></View><Pressable onPress={onClose} accessibilityLabel="선수 비교 닫기"><Text style={s.compareClose}>×</Text></Pressable></View><View style={s.compareHeroes}>{cards.map((card,index)=><View style={s.compareHero} key={card.spId}><CardImage card={card} size={72} seasonImageUrl={card.seasonImageUrl}/><Text style={s.playerName} numberOfLines={2}>{card.name}</Text><Text style={s.muted} numberOfLines={1}>{card.seasonName}</Text><Text style={s.dbMeta}>{card.primaryPosition} · 급여 {card.salary||"-"}</Text><FootRatings right={card.rightFoot} left={card.leftFoot}/><View style={s.compareGrade}><Pressable onPress={()=>changeGrade(index as 0|1,-1)}><Text style={s.compareGradeButton}>−</Text></Pressable><Text style={s.compareGradeValue}>{grades[index]}강</Text><Pressable onPress={()=>changeGrade(index as 0|1,1)}><Text style={s.compareGradeButton}>＋</Text></Pressable></View></View>)}</View>{loading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>두 선수의 능력치를 비교하는 중…</Text></View>}{!!error&&<Text style={s.error}>{error}</Text>}{left&&right&&<View style={s.compareTable}><View style={s.compareOverall}><Text style={[s.compareOverallValue,{color:statColor(left.overall)}]}>{left.overall}</Text><Text style={s.compareLabel}>OVR</Text><Text style={[s.compareOverallValue,{color:statColor(right.overall)}]}>{right.overall}</Text></View>{labels.map(label=>{const l=ability(left,label),r=ability(right,label),comparison=compareAbility(l,r);return <View style={s.compareRow} key={label}><View style={s.compareStat}><Text style={[s.compareStatValue,comparison.leftWins&&s.compareWinner]}>{l??"정보 없음"}</Text><Text style={s.compareDelta}>{comparison.leftDelta}</Text></View><Text style={s.compareLabel}>{label}</Text><View style={s.compareStat}><Text style={[s.compareStatValue,comparison.rightWins&&s.compareWinner]}>{r??"정보 없음"}</Text><Text style={s.compareDelta}>{comparison.rightDelta}</Text></View></View>})}</View>}</View>;
 }
 
 const MOBILE_DEFAULT_FILTERS: PlayerSearchFilters={query:"",seasonIds:[],positions:[],grade:1,bodyTypes:[],includeTraits:[],excludeTraits:[],abilities:[],sort:"overall-desc"};
@@ -823,24 +826,27 @@ function MobilePlayerFilters({value,meta,onChange,onReset,onApply}:{value:Player
 }
 
 function PlayerDatabase({ matches, onBack, onHeaderBackChange, initialQuery = "" }: { matches: Match[]; onBack: () => void; onHeaderBackChange: (handler: (() => void) | null) => void; initialQuery?: string }) {
-  const [query,setQuery]=useState(initialQuery),[rows,setRows]=useState<PlayerCard[]>([]),[loading,setLoading]=useState(false),[detailLoading,setDetailLoading]=useState(false),[error,setError]=useState(""),[selected,setSelected]=useState<PlayerCard|null>(null),[detail,setDetail]=useState<PlayerDetail|null>(null),[grade,setGrade]=useState(1),[favorites,setFavorites]=useState<number[]>([]);
+  const [query,setQuery]=useState(initialQuery),[rows,setRows]=useState<PlayerCard[]>([]),[loading,setLoading]=useState(false),[detailLoading,setDetailLoading]=useState(false),[error,setError]=useState(""),[selected,setSelected]=useState<PlayerCard|null>(null),[loadedDetail,setLoadedDetail]=useState<{key:string;value:PlayerDetail}|null>(null),[grade,setGrade]=useState(1),[favorites,setFavorites]=useState<number[]>([]);
   const [detailOptions,setDetailOptions]=useState<PlayerDetailOptions>({adaptation:1}),[focusedTraining,setFocusedTraining]=useState<Record<string,number>>({});
+  const detailKey=JSON.stringify([selected?.spId,grade,detailOptions]);
+  const detail=loadedDetail?.key===detailKey?loadedDetail.value:null;
   const [compare,setCompare]=useState<PlayerCard[]>([]);
   const [filters,setFilters]=useState<PlayerSearchFilters>({...MOBILE_DEFAULT_FILTERS}),[filterMeta,setFilterMeta]=useState<PlayerFilterMetadata|null>(null),[filtersOpen,setFiltersOpen]=useState(false);
   const [hasMore,setHasMore]=useState(false),[resultTotal,setResultTotal]=useState(0),[catalog,setCatalog]=useState<PlayerCatalogStatus|null>(null);
   const pageRef=useRef(0);
+  const appliedSearchRef=useRef<PlayerSearchFilters|null>(null);
   const searchAbortRef=useRef<AbortController|null>(null);
   useEffect(()=>{void loadPlayerFavorites().then(setFavorites)},[]);
-  useEffect(()=>{if(!selected)return;let active=true;const controller=new AbortController();setDetailLoading(true);setError("");void fetchPlayerDetail(selected.spId,grade,detailOptions,controller.signal).then(value=>{if(active)setDetail(value)}).catch(reason=>{if(active&&reason?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 상세 조회 실패")}).finally(()=>{if(active)setDetailLoading(false)});return()=>{active=false;controller.abort()}},[selected,grade,detailOptions]);
-  const closeDetail=useCallback(()=>{setSelected(null);setDetail(null)},[]);
+  useEffect(()=>{if(!selected)return;let active=true;const controller=new AbortController();setDetailLoading(true);setLoadedDetail(null);setError("");void fetchPlayerDetail(selected.spId,grade,detailOptions,controller.signal).then(value=>{if(active)setLoadedDetail({key:detailKey,value})}).catch(reason=>{if(active&&reason?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 상세 조회 실패")}).finally(()=>{if(active)setDetailLoading(false)});return()=>{active=false;controller.abort()}},[selected,grade,detailOptions]);
+  const closeDetail=useCallback(()=>{setSelected(null);setLoadedDetail(null)},[]);
   useEffect(()=>{onHeaderBackChange(selected?closeDetail:onBack);return()=>onHeaderBackChange(null)},[selected,closeDetail,onBack,onHeaderBackChange]);
   useEffect(()=>{const controller=new AbortController();void fetchPlayerFilters(controller.signal).then(setFilterMeta).catch(()=>undefined);return()=>controller.abort()},[]);
   useEffect(()=>()=>searchAbortRef.current?.abort(),[]);
-  const runSearch=useCallback(async(value:string,current:PlayerSearchFilters,append=false)=>{const nextPage=append?pageRef.current+1:1;const request={...current,query:value,page:nextPage,pageSize:30};if(!value.trim()&&!mobileHasFilters(request)){setError("선수명 또는 검색 조건을 입력해 주세요.");return}searchAbortRef.current?.abort();const controller=new AbortController();searchAbortRef.current=controller;setLoading(true);setError("");try{const result=await searchPlayers(request,controller.signal);if(searchAbortRef.current===controller){setRows(previous=>append?[...previous,...result.players.filter(row=>!previous.some(item=>item.spId===row.spId))]:result.players);pageRef.current=result.page;setHasMore(result.hasMore);setResultTotal(result.total);setCatalog(result.catalog);setSelected(null);if(!append)setFiltersOpen(false)}}catch(reason){if(searchAbortRef.current===controller&&(reason as {kind?:string})?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 검색 실패")}finally{if(searchAbortRef.current===controller){searchAbortRef.current=null;setLoading(false)}}},[]);
+  const runSearch=useCallback(async(value:string,current:PlayerSearchFilters,append=false)=>{const nextPage=append?pageRef.current+1:1;const request=playerSearchRequest({...current,query:value},appliedSearchRef.current,nextPage);if(!request.query.trim()&&!mobileHasFilters(request)){setError("선수명 또는 검색 조건을 입력해 주세요.");return}searchAbortRef.current?.abort();const controller=new AbortController();searchAbortRef.current=controller;setLoading(true);setError("");try{const result=await searchPlayers(request,controller.signal);if(searchAbortRef.current===controller){appliedSearchRef.current=request;setRows(previous=>append?[...previous,...result.players.filter(row=>!previous.some(item=>item.spId===row.spId))]:result.players);pageRef.current=result.page;setHasMore(result.hasMore);setResultTotal(result.total);setCatalog(result.catalog);setSelected(null);if(!append)setFiltersOpen(false)}}catch(reason){if(searchAbortRef.current===controller&&(reason as {kind?:string})?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 검색 실패")}finally{if(searchAbortRef.current===controller){searchAbortRef.current=null;setLoading(false)}}},[]);
   useEffect(()=>{if(initialQuery.trim()){setQuery(initialQuery);void runSearch(initialQuery,MOBILE_DEFAULT_FILTERS)}},[initialQuery,runSearch]);
   async function run(){await runSearch(query,filters,false)}
   function toggleCompare(card:PlayerCard){setCompare(current=>current.some(item=>item.spId===card.spId)?current.filter(item=>item.spId!==card.spId):current.length<2?[...current,card]:[current[1],card])}
-  function choose(card:PlayerCard){setSelected(card);setDetail(null);setGrade(card.grade||1);setDetailOptions({adaptation:1});setFocusedTraining({});setError("")}
+  function choose(card:PlayerCard){setSelected(card);setLoadedDetail(null);setGrade(card.grade||1);setDetailOptions({adaptation:1});setFocusedTraining({});setError("")}
   const trainingLimit=focusedTrainingLimit(grade),trainedCount=Object.values(focusedTraining).filter(value=>value>0).length;
   const focusedOverall=detail?focusedTrainingOvr(detail.primaryPosition,detail.overall,detail.abilities,focusedTraining):0;
   const focusedOverallDelta=detail?focusedOverall-detail.overall:0;
