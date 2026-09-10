@@ -37,4 +37,13 @@
 
 ## 배포 검증
 
-API 타입 검사 및 운영 배포 버전·상태 확인 결과는 배포 완료 후 아래에 기록한다.
+- 코드 커밋: `78b4955`
+- 배포 기록 커밋: `48b2ae4`
+- 원격 브랜치: `codex/fconline-search-comparison-fixes`
+- 배포: `npm run api:deploy` 성공, GitHub 푸시 성공
+- Worker 버전: `94e04fcc-6152-44db-b942-29c7ef0825ba`
+- 운영 API: https://fc-online-lab-api.bebebe97.workers.dev
+- 확인 시각: 2026-09-10 15:45:36 KST
+- `GET /health`: HTTP 200, `ok: true`
+- 본문 `serverVersion` 및 응답 헤더 `X-Server-Version`: 새 배포 버전과 일치
+- 상태 확인은 서비스 응답과 배포 버전 검증이며, 전체 선수 조회·외부 데이터센터 연동의 종합 검증은 아니다.
