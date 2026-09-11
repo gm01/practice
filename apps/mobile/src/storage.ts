@@ -17,11 +17,13 @@ export type UpgradeHistoryItem = {
   defended?: boolean;
   createdAt: string;
 };
+export type UpgradeStats = { attempts: number; successes: number };
 
 const SEARCHES = "fconline.searches.v1";
 const PLAYER_FAVORITES = "fconline.player-favorites.v1";
 const CLIENT_ERRORS = "fconline.client-errors.v1";
 const UPGRADE_HISTORY = "fconline.upgrade-history.v1";
+const UPGRADE_STATS = "fconline.upgrade-stats.v1";
 
 export async function loadSearches(): Promise<SearchItem[]> {
   try {
@@ -80,12 +82,36 @@ export async function loadUpgradeHistory(): Promise<UpgradeHistoryItem[]> {
   try { return JSON.parse(await AsyncStorage.getItem(UPGRADE_HISTORY) ?? "[]") as UpgradeHistoryItem[]; } catch { return []; }
 }
 
-export async function rememberUpgrade(item: UpgradeHistoryItem): Promise<UpgradeHistoryItem[]> {
+export async function loadUpgradeStats(): Promise<UpgradeStats> {
+  try {
+    const stored = await AsyncStorage.getItem(UPGRADE_STATS);
+    if (stored) return JSON.parse(stored) as UpgradeStats;
+  } catch { /* Existing history is used for migration below. */ }
+  const history = await loadUpgradeHistory();
+  return { attempts: history.length, successes: history.filter(item => item.success).length };
+}
+
+export async function rememberUpgrade(item: UpgradeHistoryItem) {
   return rememberUpgrades([item]);
 }
 
-export async function rememberUpgrades(items: UpgradeHistoryItem[]): Promise<UpgradeHistoryItem[]> {
-  const next = [...items].reverse().concat(await loadUpgradeHistory()).slice(0, 100);
-  await AsyncStorage.setItem(UPGRADE_HISTORY, JSON.stringify(next));
-  return next;
+export async function rememberUpgrades(items: UpgradeHistoryItem[]) {
+  const [history, stats] = await Promise.all([loadUpgradeHistory(), loadUpgradeStats()]);
+  const nextHistory = [...items].reverse().concat(history).slice(0, 100);
+  const nextStats = {
+    attempts: stats.attempts + items.length,
+    successes: stats.successes + items.filter(item => item.success).length,
+  };
+  await Promise.all([
+    AsyncStorage.setItem(UPGRADE_HISTORY, JSON.stringify(nextHistory)),
+    AsyncStorage.setItem(UPGRADE_STATS, JSON.stringify(nextStats)),
+  ]);
+  return { history: nextHistory, stats: nextStats };
+}
+
+export async function clearUpgradeHistory() {
+  await Promise.all([
+    AsyncStorage.removeItem(UPGRADE_HISTORY),
+    AsyncStorage.removeItem(UPGRADE_STATS),
+  ]);
 }
