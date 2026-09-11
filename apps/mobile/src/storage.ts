@@ -14,6 +14,7 @@ export type UpgradeHistoryItem = {
   success: boolean;
   probability: number;
   boost: number;
+  defended?: boolean;
   createdAt: string;
 };
 
@@ -80,7 +81,11 @@ export async function loadUpgradeHistory(): Promise<UpgradeHistoryItem[]> {
 }
 
 export async function rememberUpgrade(item: UpgradeHistoryItem): Promise<UpgradeHistoryItem[]> {
-  const next = [item, ...(await loadUpgradeHistory())].slice(0, 100);
+  return rememberUpgrades([item]);
+}
+
+export async function rememberUpgrades(items: UpgradeHistoryItem[]): Promise<UpgradeHistoryItem[]> {
+  const next = [...items].reverse().concat(await loadUpgradeHistory()).slice(0, 100);
   await AsyncStorage.setItem(UPGRADE_HISTORY, JSON.stringify(next));
   return next;
 }

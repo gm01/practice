@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { simulateUpgrade, upgradeProbability } from "./upgradeSimulator";
+import { simulateUpgrade, simulateUpgradeSeries, upgradeProbability } from "./upgradeSimulator";
 
 describe("upgrade simulator", () => {
   it("scales the success rate with the selected boost", () => {
@@ -14,5 +14,16 @@ describe("upgrade simulator", () => {
   it("never recovers below grade one after failure", () => {
     const values = [0.99, 0.99];
     expect(simulateUpgrade(1, 1, () => values.shift() ?? 0.99)).toMatchObject({ success: false, toGrade: 1 });
+  });
+
+  it("keeps the current grade when protection is enabled", () => {
+    expect(simulateUpgrade(8, 5, () => 0.99, true)).toMatchObject({ success: false, fromGrade: 8, toGrade: 8, defended: true });
+  });
+
+  it("runs consecutive attempts using each previous result", () => {
+    const results = simulateUpgradeSeries(1, 5, 10, false, () => 0);
+    expect(results).toHaveLength(10);
+    expect(results[0]).toMatchObject({ fromGrade: 1, toGrade: 2 });
+    expect(results.at(-1)?.fromGrade).toBe(10);
   });
 });
