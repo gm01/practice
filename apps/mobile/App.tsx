@@ -29,6 +29,7 @@ import { compareAbility, setComparisonGrade } from "../../shared/comparison";
 import type { DiagnosticInfo, PlayerCatalogStatus } from "../../shared/contracts";
 import { installMobileErrorHandler, reportMobileError, setRelatedRequestId } from "./src/telemetry";
 import { resolveBackAction } from "./src/navigation";
+import { analyzePlayStyle, dailyChallenge } from "./src/gamification";
 import {
   loadSearches,
   loadPlayerFavorites,
@@ -257,6 +258,8 @@ function Home({
       shots = sample.reduce((a, m) => a + m.stats.shots, 0);
     return { wins, goals, against, shots };
   }, [sample]);
+  const playStyle = useMemo(() => analyzePlayStyle(data.matches), [data.matches]);
+  const challenge = useMemo(() => dailyChallenge(data.profile.nickname, data.matches), [data.matches, data.profile.nickname]);
   const players = useMemo(() => {
     const map = new Map<
       number,
@@ -330,6 +333,20 @@ function Home({
             LV.{data.profile.level.toLocaleString()} ·{" "}
             {data.profile.divisionName}
           </Text>
+        </View>
+      </View>
+      <View style={s.funGrid}>
+        <View style={s.funCard}>
+          <View style={s.funCardTop}><Text style={s.funEmoji}>{playStyle.emoji}</Text><Text style={s.funLabel}>나의 감독 성향</Text></View>
+          <Text style={s.funTitle}>{playStyle.title}</Text>
+          <Text style={s.funDescription}>{playStyle.description}</Text>
+          <Text style={s.funMetric}>{playStyle.metric}</Text>
+        </View>
+        <View style={[s.funCard, challenge.completed && s.funCardComplete]}>
+          <View style={s.funCardTop}><Text style={s.funEmoji}>{challenge.completed ? "🏆" : challenge.emoji}</Text><Text style={s.funLabel}>오늘의 도전</Text></View>
+          <Text style={s.funTitle}>{challenge.completed ? "도전 성공!" : challenge.title}</Text>
+          <Text style={s.funDescription}>{challenge.description}</Text>
+          <View style={s.challengeRow}><View style={s.challengeTrack}><View style={[s.challengeFill, { width: `${Math.round(challenge.progress / challenge.target * 100)}%` }]} /></View><Text style={s.challengeValue}>{challenge.progress}/{challenge.target}{challenge.unit}</Text></View>
         </View>
       </View>
       <View style={s.reportHeading}><Text style={s.heading}>최근 {sample.length}경기 리포트</Text><View style={s.rangeRow}>{([5,10,20] as const).map(value=><Pressable key={value} style={[s.rangeChip,range===value&&s.rangeChipActive]} onPress={()=>setRange(value)}><Text style={range===value?s.filterTextActive:s.muted}>{value}</Text></Pressable>)}</View></View>
