@@ -22,6 +22,10 @@ export type UpgradeResult = {
   defended: boolean;
 };
 
+export function canUseGradeProtection(grade: number) {
+  return Math.round(grade) >= 8;
+}
+
 export function upgradeProbability(grade: number, boost: number) {
   const safeGrade = Math.min(12, Math.max(1, Math.round(grade)));
   const safeBoost = Math.min(5, Math.max(1, Math.round(boost)));
@@ -34,7 +38,7 @@ export function simulateUpgrade(grade: number, boost: number, random = Math.rand
   const probability = upgradeProbability(fromGrade, safeBoost);
   const success = random() * 100 < probability;
   if (success) return { success, fromGrade, toGrade: fromGrade + 1, probability, boost: safeBoost, defended: false };
-  if (protectGrade) return { success, fromGrade, toGrade: fromGrade, probability, boost: safeBoost, defended: true };
+  if (protectGrade && canUseGradeProtection(fromGrade)) return { success, fromGrade, toGrade: fromGrade, probability, boost: safeBoost, defended: true };
   const maximumDrop = fromGrade >= 8 ? 3 : fromGrade >= 5 ? 2 : 1;
   const drop = 1 + Math.floor(random() * maximumDrop);
   return { success, fromGrade, toGrade: Math.max(1, fromGrade - drop), probability, boost: safeBoost, defended: false };

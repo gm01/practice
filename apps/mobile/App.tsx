@@ -46,7 +46,7 @@ import {
   type SearchItem,
   type UpgradeHistoryItem,
 } from "./src/storage";
-import { simulateUpgradeSeries, upgradeProbability, type UpgradeResult } from "./src/upgradeSimulator";
+import { canUseGradeProtection, simulateUpgradeSeries, upgradeProbability, type UpgradeResult } from "./src/upgradeSimulator";
 
 const average = (v: number[]) =>
   v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
@@ -838,17 +838,20 @@ function UpgradeDataCard({ card, grade, overall }: { card: PlayerCard; grade: nu
 function UpgradeSimulator({ card, initialGrade }: { card: PlayerCard; initialGrade: number }) {
   const [grade,setGrade]=useState(Math.min(13,Math.max(1,initialGrade))),[boost,setBoost]=useState(5),[protectGrade,setProtectGrade]=useState(false),[running,setRunning]=useState(false),[runningCount,setRunningCount]=useState(1),[result,setResult]=useState<UpgradeResult|null>(null),[batchResult,setBatchResult]=useState<{attempts:number;successes:number;finalGrade:number}|null>(null),[history,setHistory]=useState<UpgradeHistoryItem[]>([]);
   const [overall,setOverall]=useState<{current?:number;target?:number}>({});
-  const timerRef=useRef<ReturnType<typeof setTimeout>|null>(null),motion=useRef(new Animated.Value(0)).current,animationRef=useRef<Animated.CompositeAnimation|null>(null);
+  const timerRef=useRef<ReturnType<typeof setTimeout>|null>(null),motion=useRef(new Animated.Value(0)).current,animationRef=useRef<Animated.CompositeAnimation|null>(null),upgradeScrollRef=useRef<ScrollView>(null),upgradeHeroYRef=useRef(0);
   useEffect(()=>{void loadUpgradeHistory().then(setHistory)},[]);
   useEffect(()=>()=>{if(timerRef.current)clearTimeout(timerRef.current);animationRef.current?.stop()},[]);
+  const canProtect=canUseGradeProtection(grade);
+  useEffect(()=>{if(!canProtect&&protectGrade)setProtectGrade(false)},[canProtect,protectGrade]);
   useEffect(()=>{let active=true;const controller=new AbortController();setOverall({});const requests=[fetchPlayerDetail(card.spId,grade,{adaptation:1},controller.signal),...(grade<13?[fetchPlayerDetail(card.spId,grade+1,{adaptation:1},controller.signal)]:[])];Promise.all(requests).then(([current,target])=>{if(active)setOverall({current:current.overall,target:target?.overall})}).catch(()=>undefined);return()=>{active=false;controller.abort()}},[card.spId,grade]);
   const probability=grade<13?upgradeProbability(grade,boost):0,attempts=history.length,successes=history.filter(item=>item.success).length;
   const cardScale=motion.interpolate({inputRange:[0,1],outputRange:[1,1.075]}),glowOpacity=motion.interpolate({inputRange:[0,1],outputRange:[0.12,0.95]});
   function chooseGrade(value:number){if(running)return;setGrade(value);setResult(null);setBatchResult(null)}
   function attempt(count:number){
     if(running||grade>=13)return;
-    const results=simulateUpgradeSeries(grade,boost,count,protectGrade);
+    const results=simulateUpgradeSeries(grade,boost,count,canProtect&&protectGrade);
     if(!results.length)return;
+    upgradeScrollRef.current?.scrollTo({y:Math.max(0,upgradeHeroYRef.current-8),animated:true});
     setRunning(true);setRunningCount(count);setResult(null);setBatchResult(null);Vibration.vibrate(35);motion.setValue(0);
     animationRef.current=Animated.loop(Animated.sequence([
       Animated.timing(motion,{toValue:1,duration:360,easing:Easing.inOut(Easing.cubic),useNativeDriver:true}),
@@ -867,9 +870,9 @@ function UpgradeSimulator({ card, initialGrade }: { card: PlayerCard; initialGra
       setResult(last);setBatchResult(count>1?{attempts:results.length,successes:results.filter(item=>item.success).length,finalGrade:last.toGrade}:null);setGrade(Math.min(13,last.toGrade));setRunning(false);Vibration.vibrate(last.success?[0,80,60,160]:[0,180]);void rememberUpgrades(items).then(setHistory);
     },2100);
   }
-  return <ScrollView contentContainerStyle={s.content} nestedScrollEnabled>
+  return <ScrollView ref={upgradeScrollRef} contentContainerStyle={s.content} nestedScrollEnabled>
     <Text style={s.eyebrow}>UPGRADE LAB</Text><Text style={s.playerHeroName}>강화 실험실</Text><Text style={s.upgradeNotice}>실제 게임 재화가 사용되지 않는 앱 내 시뮬레이션입니다.</Text>
-    <View style={[s.upgradeHero,result?.success&&s.upgradeHeroSuccess,result&&!result.success&&s.upgradeHeroFail]}>
+    <View onLayout={event=>{upgradeHeroYRef.current=event.nativeEvent.layout.y}} style={[s.upgradeHero,result?.success&&s.upgradeHeroSuccess,result&&!result.success&&s.upgradeHeroFail]}>
       <Animated.View pointerEvents="none" style={[s.upgradeGlow,{opacity:glowOpacity}]}/>
       <Animated.View style={{transform:[{scale:cardScale}]}}><UpgradeDataCard card={card} grade={grade} overall={overall.current}/></Animated.View>
       {running&&<View style={s.upgradeResult}><View style={s.upgradeEnergyRow}>{[0,1,2,3,4].map(value=><View key={value} style={s.upgradeEnergyDot}/>)}</View><Text style={s.upgradeRunningText}>{runningCount===10?"10번의 강화 결과를 계산하는 중…":"강화 에너지가 카드에 집중되는 중…"}</Text></View>}
@@ -878,10 +881,10 @@ function UpgradeSimulator({ card, initialGrade }: { card: PlayerCard; initialGra
     </View>
     <Text style={s.heading}>시작 강화 단계</Text><ScrollView horizontal directionalLockEnabled showsHorizontalScrollIndicator={false} contentContainerStyle={s.upgradeChoices}>{Array.from({length:12},(_,index)=>index+1).map(value=><Pressable key={value} disabled={running} style={[s.upgradeChoice,grade===value&&s.upgradeChoiceActive]} onPress={()=>chooseGrade(value)}><Text style={grade===value?s.upgradeChoiceTextActive:s.muted}>+{value}</Text></Pressable>)}</ScrollView>
     <View style={s.upgradePanel}><View style={s.upgradePanelHeading}><Text style={s.headingCompact}>부스트 게이지</Text><Text style={s.upgradeProbability}>{grade>=13?"MAX":probability+"%"}</Text></View><Text style={s.muted}>{grade>=13?"최고 강화 단계에 도달했습니다.":"게이지를 채울수록 성공 확률이 높아집니다."}</Text><View style={s.upgradeGauge}>{[1,2,3,4,5].map(value=><Pressable key={value} disabled={running||grade>=13} style={[s.upgradeGaugeCell,value<=boost&&s.upgradeGaugeCellActive]} onPress={()=>setBoost(value)} accessibilityLabel={"부스트 게이지 "+value+"칸"}/>)}</View><View style={s.upgradeGaugeLabels}><Text style={s.muted}>1칸</Text><Text style={s.muted}>5칸</Text></View>
-      <View style={s.upgradeProtect}><View style={s.flex}><Text style={s.upgradeProtectTitle}>🛡️ 강화 단계 방어</Text><Text style={s.muted}>실패해도 현재 강화 단계가 유지됩니다.</Text></View><Switch value={protectGrade} onValueChange={setProtectGrade} disabled={running} trackColor={{false:C.line,true:"#315d47"}} thumbColor={protectGrade?C.green:"#70847a"} accessibilityLabel="강화 단계 방어"/></View>
+      <View style={[s.upgradeProtect,!canProtect&&s.upgradeProtectDisabled]}><View style={s.flex}><Text style={s.upgradeProtectTitle}>🛡️ 강화 단계 방어</Text><Text style={s.muted}>{canProtect?"실패해도 현재 강화 단계가 유지됩니다.":"8강부터 사용할 수 있습니다."}</Text></View><View style={s.upgradeProtectSwitchWrap}><Switch style={s.upgradeProtectSwitch} value={canProtect&&protectGrade} onValueChange={setProtectGrade} disabled={running||!canProtect} trackColor={{false:C.line,true:"#315d47"}} thumbColor={canProtect&&protectGrade?C.green:"#70847a"} accessibilityLabel="강화 단계 방어"/></View></View>
       <View style={s.upgradeActions}><Pressable disabled={running||grade>=13} style={[s.upgradeButton,s.upgradeSingleButton,(running||grade>=13)&&s.disabled]} onPress={()=>attempt(1)}><Text style={s.upgradeButtonText}>{grade>=13?"최고 강화":running?"진행 중":"1회 도전"}</Text></Pressable><Pressable disabled={running||grade>=13} style={[s.upgradeButton,s.upgradeTenButton,(running||grade>=13)&&s.disabled]} onPress={()=>attempt(10)}><Text style={s.upgradeTenButtonText}>10회 한꺼번에</Text></Pressable></View>
       <Text style={s.upgradeProbabilityNote}>표시 확률과 실패 복구 단계는 재미를 위한 시뮬레이션 값입니다.</Text></View>
-    <Text style={s.heading}>나의 강화 기록</Text><View style={s.upgradeStats}><Kpi label="전체" value={`${attempts}`} note="최대 100회"/><Kpi label="성공" value={`${successes}`} note={attempts?`${Math.round(successes/attempts*100)}% 성공`:"도전 전"}/><Kpi label="실패" value={`${attempts-successes}`} note="누적 결과"/></View>
+    <Text style={s.heading}>나의 강화 기록</Text><View pointerEvents="none" style={s.upgradeStats}><Kpi label="전체" value={`${attempts}`} note="최대 100회"/><Kpi label="성공" value={`${successes}`} note={attempts?`${Math.round(successes/attempts*100)}% 성공`:"도전 전"}/><Kpi label="실패" value={`${attempts-successes}`} note="누적 결과"/></View>
     {history.length===0?<Text style={s.warning}>아직 강화 기록이 없습니다. 첫 강화에 도전해 보세요.</Text>:<ScrollView horizontal directionalLockEnabled nestedScrollEnabled showsHorizontalScrollIndicator contentContainerStyle={s.upgradeHistory}>{history.map(item=><View style={s.upgradeHistoryCard} key={item.id}><Image source={{uri:item.imageUrl}} style={s.upgradeHistoryImage} resizeMode="contain"/><View style={[s.upgradeHistoryResult,item.success?s.upgradeHistorySuccess:item.defended?s.upgradeHistoryDefended:s.upgradeHistoryFail]}><Text style={s.upgradeHistoryResultText}>{item.success?"성공":item.defended?"방어":"실패"}</Text></View><View style={s.flex}><Text style={s.playerName} numberOfLines={1}>{item.name}</Text><Text style={s.muted} numberOfLines={1}>{item.seasonName}</Text><Text style={s.muted}>{item.boost}칸 · {item.probability}%</Text></View><Text style={s.upgradeHistoryGrade}>+{item.fromGrade} → +{item.toGrade}</Text></View>)}</ScrollView>}
   </ScrollView>;
 }
