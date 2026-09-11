@@ -138,12 +138,15 @@ async function nexon<T>(path: string, env: Env, trace: RequestTrace, params: Rec
   throw new ApiError(502, lastError, lastCode, "nexon", { upstreamStatus, stage: path });
 }
 
-async function loadLiveMetadata(): Promise<Metadata> {
+async function loadLiveMetadata(fresh = false): Promise<Metadata> {
+  if (fresh) metadataCache = null;
+  const requestUrl = (path: string) => fresh ? `${META}/${path}?catalog-refresh=${Date.now()}` : `${META}/${path}`;
+  const requestInit = fresh ? { cache: "no-store" as const, cf: { cacheTtl: 0 } } : { cf: { cacheTtl: 86_400 } };
   if (!metadataCache) metadataCache = Promise.all([
-    fetch(`${META}/spid.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ id: number; name: string }>>,
-    fetch(`${META}/spposition.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ spposition: number; desc: string }>>,
-    fetch(`${META}/division.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ divisionId: number; divisionName: string }>>,
-    fetch(`${META}/seasonid.json`, { cf: { cacheTtl: 86_400 } }).then(response => response.json()) as Promise<Array<{ seasonId: number; className: string; seasonImg: string }>>,
+    fetch(requestUrl("spid.json"), requestInit).then(response => response.json()) as Promise<Array<{ id: number; name: string }>>,
+    fetch(requestUrl("spposition.json"), requestInit).then(response => response.json()) as Promise<Array<{ spposition: number; desc: string }>>,
+    fetch(requestUrl("division.json"), requestInit).then(response => response.json()) as Promise<Array<{ divisionId: number; divisionName: string }>>,
+    fetch(requestUrl("seasonid.json"), requestInit).then(response => response.json()) as Promise<Array<{ seasonId: number; className: string; seasonImg: string }>>,
   ]).then(([players, positions, divisions, seasons]) => ({
     players: new Map(players.map(item => [Number(item.id), item.name])),
     positions: new Map(positions.map(item => [Number(item.spposition), item.desc])),
@@ -374,7 +377,7 @@ async function loadTeamColorCatalog(env: Env, trace: RequestTrace) {
 async function refreshPlayerCatalog(env: Env, trace: RequestTrace) {
   if (!env.PLAYER_DB) return null;
   try {
-    const [meta, teamColors] = await Promise.all([loadLiveMetadata(), loadLiveTeamColorCatalog(env, trace)]);
+    const [meta, teamColors] = await Promise.all([loadLiveMetadata(true), loadLiveTeamColorCatalog(env, trace)]);
     const snapshot: CatalogSnapshot = {
       players: [...meta.players].map(([id, name]) => ({ id, name })),
       positions: [...meta.positions].map(([id, name]) => ({ id, name })),
