@@ -3,10 +3,24 @@ import type { ClientErrorEvent } from "../../../shared/contracts";
 import { enqueueBounded } from "../../../shared/clientTelemetry";
 
 export type SearchItem = { nickname: string; searchedAt: string; favorite: boolean };
+export type UpgradeHistoryItem = {
+  id: string;
+  spId: number;
+  name: string;
+  seasonName: string;
+  imageUrl: string;
+  fromGrade: number;
+  toGrade: number;
+  success: boolean;
+  probability: number;
+  boost: number;
+  createdAt: string;
+};
 
 const SEARCHES = "fconline.searches.v1";
 const PLAYER_FAVORITES = "fconline.player-favorites.v1";
 const CLIENT_ERRORS = "fconline.client-errors.v1";
+const UPGRADE_HISTORY = "fconline.upgrade-history.v1";
 
 export async function loadSearches(): Promise<SearchItem[]> {
   try {
@@ -59,4 +73,14 @@ export async function queueClientError(event: ClientErrorEvent) {
 
 export async function saveClientErrors(events: ClientErrorEvent[]) {
   await AsyncStorage.setItem(CLIENT_ERRORS, JSON.stringify(events.slice(-20)));
+}
+
+export async function loadUpgradeHistory(): Promise<UpgradeHistoryItem[]> {
+  try { return JSON.parse(await AsyncStorage.getItem(UPGRADE_HISTORY) ?? "[]") as UpgradeHistoryItem[]; } catch { return []; }
+}
+
+export async function rememberUpgrade(item: UpgradeHistoryItem): Promise<UpgradeHistoryItem[]> {
+  const next = [item, ...(await loadUpgradeHistory())].slice(0, 100);
+  await AsyncStorage.setItem(UPGRADE_HISTORY, JSON.stringify(next));
+  return next;
 }

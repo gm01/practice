@@ -15,6 +15,7 @@ import {
   Text,
   TextInput,
   TouchableWithoutFeedback,
+  Vibration,
   View,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -37,8 +38,12 @@ import {
   removeSearch,
   toggleFavorite,
   togglePlayerFavorite,
+  loadUpgradeHistory,
+  rememberUpgrade,
   type SearchItem,
+  type UpgradeHistoryItem,
 } from "./src/storage";
+import { simulateUpgrade, upgradeProbability, type UpgradeResult } from "./src/upgradeSimulator";
 
 const average = (v: number[]) =>
   v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
@@ -809,6 +814,42 @@ function MobilePlayerComparison({ cards, onClose }: { cards: [PlayerCard,PlayerC
   return <View style={s.comparePanel}><View style={s.compareHeading}><View><Text style={s.eyebrow}>PLAYER COMPARISON</Text><Text style={s.headingCompact}>선수 비교</Text></View><Pressable onPress={onClose} accessibilityLabel="선수 비교 닫기"><Text style={s.compareClose}>×</Text></Pressable></View><View style={s.compareHeroes}>{cards.map((card,index)=><View style={s.compareHero} key={card.spId}><CardImage card={card} size={72} seasonImageUrl={card.seasonImageUrl}/><Text style={s.playerName} numberOfLines={2}>{card.name}</Text><Text style={s.muted} numberOfLines={1}>{card.seasonName}</Text><Text style={s.dbMeta}>{card.primaryPosition} · 급여 {card.salary||"-"}</Text><FootRatings right={card.rightFoot} left={card.leftFoot}/><View style={s.compareGrade}><Pressable onPress={()=>changeGrade(index as 0|1,-1)}><Text style={s.compareGradeButton}>−</Text></Pressable><Text style={s.compareGradeValue}>{grades[index]}강</Text><Pressable onPress={()=>changeGrade(index as 0|1,1)}><Text style={s.compareGradeButton}>＋</Text></Pressable></View></View>)}</View>{loading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>두 선수의 능력치를 비교하는 중…</Text></View>}{!!error&&<Text style={s.error}>{error}</Text>}{left&&right&&<View style={s.compareTable}><View style={s.compareOverall}><Text style={[s.compareOverallValue,{color:statColor(left.overall)}]}>{left.overall}</Text><Text style={s.compareLabel}>OVR</Text><Text style={[s.compareOverallValue,{color:statColor(right.overall)}]}>{right.overall}</Text></View>{labels.map(label=>{const l=ability(left,label),r=ability(right,label),comparison=compareAbility(l,r);return <View style={s.compareRow} key={label}><View style={s.compareStat}><Text style={[s.compareStatValue,comparison.leftWins&&s.compareWinner]}>{l??"정보 없음"}</Text><Text style={s.compareDelta}>{comparison.leftDelta}</Text></View><Text style={s.compareLabel}>{label}</Text><View style={s.compareStat}><Text style={[s.compareStatValue,comparison.rightWins&&s.compareWinner]}>{r??"정보 없음"}</Text><Text style={s.compareDelta}>{comparison.rightDelta}</Text></View></View>})}</View>}</View>;
 }
 
+function UpgradeSimulator({ card, initialGrade }: { card: PlayerCard; initialGrade: number }) {
+  const [grade,setGrade]=useState(Math.min(13,Math.max(1,initialGrade))),[boost,setBoost]=useState(5),[running,setRunning]=useState(false),[result,setResult]=useState<UpgradeResult|null>(null),[history,setHistory]=useState<UpgradeHistoryItem[]>([]);
+  const [overall,setOverall]=useState<{current?:number;target?:number}>({});
+  const timerRef=useRef<ReturnType<typeof setTimeout>|null>(null);
+  useEffect(()=>{void loadUpgradeHistory().then(setHistory)},[]);
+  useEffect(()=>()=>{if(timerRef.current)clearTimeout(timerRef.current)},[]);
+  useEffect(()=>{let active=true;const controller=new AbortController();setOverall({});const requests=[fetchPlayerDetail(card.spId,grade,{adaptation:1},controller.signal),...(grade<13?[fetchPlayerDetail(card.spId,grade+1,{adaptation:1},controller.signal)]:[])];Promise.all(requests).then(([current,target])=>{if(active)setOverall({current:current.overall,target:target?.overall})}).catch(()=>undefined);return()=>{active=false;controller.abort()}},[card.spId,grade]);
+  const probability=grade<13?upgradeProbability(grade,boost):0;
+  const attempts=history.length,successes=history.filter(item=>item.success).length;
+  function chooseGrade(value:number){if(running)return;setGrade(value);setResult(null)}
+  function attempt(){
+    if(running||grade>=13)return;
+    setRunning(true);setResult(null);Vibration.vibrate(35);
+    timerRef.current=setTimeout(()=>{
+      const next=simulateUpgrade(grade,boost);
+      const item:UpgradeHistoryItem={id:`${Date.now()}-${Math.random().toString(36).slice(2,7)}`,spId:card.spId,name:card.name,seasonName:card.seasonName,imageUrl:card.imageUrls[0]??"",fromGrade:next.fromGrade,toGrade:next.toGrade,success:next.success,probability:next.probability,boost:next.boost,createdAt:new Date().toISOString()};
+      setResult(next);setGrade(Math.min(13,next.toGrade));setRunning(false);Vibration.vibrate(next.success?[0,80,60,160]:[0,180]);void rememberUpgrade(item).then(setHistory);
+    },1800);
+  }
+  return <ScrollView contentContainerStyle={s.content}>
+    <Text style={s.eyebrow}>UPGRADE LAB</Text><Text style={s.playerHeroName}>강화 실험실</Text><Text style={s.upgradeNotice}>실제 게임 재화가 사용되지 않는 앱 내 시뮬레이션입니다.</Text>
+    <View style={[s.upgradeHero,result?.success&&s.upgradeHeroSuccess,result&&!result.success&&s.upgradeHeroFail]}>
+      <CardImage card={card} size={132} seasonImageUrl={card.seasonImageUrl}/>
+      <Text style={s.upgradePlayerName}>{card.name}</Text><Text style={s.muted}>{card.seasonName}</Text>
+      <View style={s.upgradeGradeRow}><View style={s.upgradeGradeBadge}><Text style={s.upgradeGradeText}>+{grade}</Text></View>{grade<13&&<><Text style={s.upgradeArrow}>→</Text><View style={[s.upgradeGradeBadge,s.upgradeTargetBadge]}><Text style={s.upgradeGradeText}>+{grade+1}</Text></View></>}</View>
+      <Text style={s.upgradeOvr}>{overall.current?`OVR ${overall.current}`:"OVR 확인 중"} {overall.target?`→ ${overall.target}`:grade>=13?" · 최고 강화":""}</Text>
+      {running&&<View style={s.upgradeResult}><ActivityIndicator color={C.green} size="large"/><Text style={s.upgradeRunningText}>강화 에너지를 주입하는 중…</Text></View>}
+      {!running&&result&&<View style={s.upgradeResult}><Text style={[s.upgradeResultTitle,{color:result.success?C.green:C.red}]}>{result.success?"강화 성공!":"강화 실패"}</Text><Text style={s.upgradeResultGrade}>+{result.fromGrade} → +{result.toGrade}</Text><Text style={s.muted}>{result.success?"한 단계 더 높은 곳으로 올라갔습니다.":"복구 단계에서 다시 도전할 수 있습니다."}</Text></View>}
+    </View>
+    <Text style={s.heading}>시작 강화 단계</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.upgradeChoices}>{Array.from({length:12},(_,index)=>index+1).map(value=><Pressable key={value} disabled={running} style={[s.upgradeChoice,grade===value&&s.upgradeChoiceActive]} onPress={()=>chooseGrade(value)}><Text style={grade===value?s.upgradeChoiceTextActive:s.muted}>+{value}</Text></Pressable>)}</ScrollView>
+    <View style={s.upgradePanel}><View style={s.upgradePanelHeading}><Text style={s.headingCompact}>부스트 게이지</Text><Text style={s.upgradeProbability}>{grade>=13?"MAX":`${probability}%`}</Text></View><Text style={s.muted}>{grade>=13?"최고 강화 단계에 도달했습니다.":"게이지를 채울수록 성공 확률이 높아집니다."}</Text><View style={s.upgradeGauge}>{[1,2,3,4,5].map(value=><Pressable key={value} disabled={running||grade>=13} style={[s.upgradeGaugeCell,value<=boost&&s.upgradeGaugeCellActive]} onPress={()=>setBoost(value)} accessibilityLabel={`부스트 게이지 ${value}칸`}/>)}</View><View style={s.upgradeGaugeLabels}><Text style={s.muted}>1칸</Text><Text style={s.muted}>5칸</Text></View><Pressable disabled={running||grade>=13} style={[s.upgradeButton,(running||grade>=13)&&s.disabled]} onPress={attempt}><Text style={s.upgradeButtonText}>{grade>=13?"최고 강화 달성":running?"강화 진행 중…":result?"다시 강화하기":"강화 시도"}</Text></Pressable><Text style={s.upgradeProbabilityNote}>표시 확률과 실패 복구 단계는 재미를 위한 시뮬레이션 값입니다.</Text></View>
+    <Text style={s.heading}>나의 강화 기록</Text><View style={s.upgradeStats}><Kpi label="전체" value={`${attempts}`} note="최대 100회"/><Kpi label="성공" value={`${successes}`} note={attempts?`${Math.round(successes/attempts*100)}% 성공`:"도전 전"}/><Kpi label="실패" value={`${attempts-successes}`} note="누적 결과"/></View>
+    {history.length===0?<Text style={s.warning}>아직 강화 기록이 없습니다. 첫 강화에 도전해 보세요.</Text>:<View style={s.upgradeHistory}>{history.slice(0,20).map(item=><View style={s.upgradeHistoryRow} key={item.id}><View style={[s.upgradeHistoryResult,item.success?s.upgradeHistorySuccess:s.upgradeHistoryFail]}><Text style={s.upgradeHistoryResultText}>{item.success?"성공":"실패"}</Text></View><View style={s.flex}><Text style={s.playerName} numberOfLines={1}>{item.name}</Text><Text style={s.muted} numberOfLines={1}>{item.seasonName} · 게이지 {item.boost}칸 · {item.probability}%</Text></View><Text style={s.upgradeHistoryGrade}>+{item.fromGrade} → +{item.toGrade}</Text></View>)}</View>}
+  </ScrollView>;
+}
+
 const MOBILE_DEFAULT_FILTERS: PlayerSearchFilters={query:"",seasonIds:[],positions:[],grade:1,bodyTypes:[],includeTraits:[],excludeTraits:[],abilities:[],sort:"overall-desc"};
 function mobileHasFilters(filters:PlayerSearchFilters){return Object.entries(filters).some(([key,value])=>!["query","grade","sort","limit","page","pageSize"].includes(key)&&(Array.isArray(value)?value.length:value!==undefined&&value!==""))}
 function mobileToggle<T>(values:T[]|undefined,value:T){return values?.includes(value)?values.filter(item=>item!==value):[...(values??[]),value]}
@@ -848,6 +889,7 @@ function PlayerDatabase({ matches, onBack, onHeaderBackChange, initialQuery = ""
   const detailKey=JSON.stringify([selected?.spId,grade,detailOptions]);
   const detail=loadedDetail?.key===detailKey?loadedDetail.value:null;
   const [compare,setCompare]=useState<PlayerCard[]>([]);
+  const [simulatorOpen,setSimulatorOpen]=useState(false);
   const [filters,setFilters]=useState<PlayerSearchFilters>({...MOBILE_DEFAULT_FILTERS}),[filterMeta,setFilterMeta]=useState<PlayerFilterMetadata|null>(null),[filtersOpen,setFiltersOpen]=useState(false);
   const [hasMore,setHasMore]=useState(false),[resultTotal,setResultTotal]=useState(0),[catalog,setCatalog]=useState<PlayerCatalogStatus|null>(null);
   const pageRef=useRef(0);
@@ -855,23 +897,26 @@ function PlayerDatabase({ matches, onBack, onHeaderBackChange, initialQuery = ""
   const searchAbortRef=useRef<AbortController|null>(null);
   useEffect(()=>{void loadPlayerFavorites().then(setFavorites)},[]);
   useEffect(()=>{if(!selected)return;let active=true;const controller=new AbortController();setDetailLoading(true);setLoadedDetail(null);setError("");void fetchPlayerDetail(selected.spId,grade,detailOptions,controller.signal).then(value=>{if(active)setLoadedDetail({key:detailKey,value})}).catch(reason=>{if(active&&reason?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 상세 조회 실패")}).finally(()=>{if(active)setDetailLoading(false)});return()=>{active=false;controller.abort()}},[selected,grade,detailOptions]);
-  const closeDetail=useCallback(()=>{setSelected(null);setLoadedDetail(null)},[]);
-  useEffect(()=>{onHeaderBackChange(selected?closeDetail:onBack);return()=>onHeaderBackChange(null)},[selected,closeDetail,onBack,onHeaderBackChange]);
+  const closeDetail=useCallback(()=>{setSelected(null);setLoadedDetail(null);setSimulatorOpen(false)},[]);
+  const closeSimulator=useCallback(()=>setSimulatorOpen(false),[]);
+  useEffect(()=>{onHeaderBackChange(simulatorOpen?closeSimulator:selected?closeDetail:onBack);return()=>onHeaderBackChange(null)},[simulatorOpen,selected,closeSimulator,closeDetail,onBack,onHeaderBackChange]);
   useEffect(()=>{const controller=new AbortController();void fetchPlayerFilters(controller.signal).then(setFilterMeta).catch(()=>undefined);return()=>controller.abort()},[]);
   useEffect(()=>()=>searchAbortRef.current?.abort(),[]);
   const runSearch=useCallback(async(value:string,current:PlayerSearchFilters,append=false)=>{const nextPage=append?pageRef.current+1:1;const request=playerSearchRequest({...current,query:value},appliedSearchRef.current,nextPage);if(!request.query.trim()&&!mobileHasFilters(request)){setError("선수명 또는 검색 조건을 입력해 주세요.");return}searchAbortRef.current?.abort();const controller=new AbortController();searchAbortRef.current=controller;setLoading(true);setError("");try{const result=await searchPlayers(request,controller.signal);if(searchAbortRef.current===controller){appliedSearchRef.current=request;setRows(previous=>append?[...previous,...result.players.filter(row=>!previous.some(item=>item.spId===row.spId))]:result.players);pageRef.current=result.page;setHasMore(result.hasMore);setResultTotal(result.total);setCatalog(result.catalog);setSelected(null);if(!append)setFiltersOpen(false)}}catch(reason){if(searchAbortRef.current===controller&&(reason as {kind?:string})?.kind!=="cancelled")setError(reason instanceof Error?reason.message:"선수 검색 실패")}finally{if(searchAbortRef.current===controller){searchAbortRef.current=null;setLoading(false)}}},[]);
   useEffect(()=>{if(initialQuery.trim()){setQuery(initialQuery);void runSearch(initialQuery,MOBILE_DEFAULT_FILTERS)}},[initialQuery,runSearch]);
   async function run(){await runSearch(query,filters,false)}
   function toggleCompare(card:PlayerCard){setCompare(current=>current.some(item=>item.spId===card.spId)?current.filter(item=>item.spId!==card.spId):current.length<2?[...current,card]:[current[1],card])}
-  function choose(card:PlayerCard){setSelected(card);setLoadedDetail(null);setGrade(card.grade||1);setDetailOptions({adaptation:1});setFocusedTraining({});setError("")}
+  function choose(card:PlayerCard){setSelected(card);setLoadedDetail(null);setGrade(card.grade||1);setDetailOptions({adaptation:1});setFocusedTraining({});setSimulatorOpen(false);setError("")}
   const trainingLimit=focusedTrainingLimit(grade),trainedCount=Object.values(focusedTraining).filter(value=>value>0).length;
   const focusedOverall=detail?focusedTrainingOvr(detail.primaryPosition,detail.overall,detail.abilities,focusedTraining):0;
   const focusedOverallDelta=detail?focusedOverall-detail.overall:0;
   const abilityColumns=detail?orderedAbilityColumns(detail.abilities):[];
   function changeFocusedTraining(label:string,delta:number){setFocusedTraining(current=>{const value=current[label]??0;if(delta>0&&value===0&&Object.values(current).filter(item=>item>0).length>=trainingLimit)return current;const next=Math.max(0,Math.min(2,value+delta));if(next===0){const copy={...current};delete copy[label];return copy}return {...current,[label]:next}})}
+  if(selected&&simulatorOpen)return <UpgradeSimulator card={selected} initialGrade={grade}/>;
   if(selected){
     const appearances=matches.flatMap(match=>{const player=match.players.find(p=>p.spId===selected.spId&&p.rating>0);return player?[{match,player}]:[]});
     return <ScrollView contentContainerStyle={s.content}><View style={s.dbHero}><CardImage card={detail??selected} size={118} seasonImageUrl={selected.seasonImageUrl}/><View style={s.flex}><Text style={s.eyebrow}>PLAYER INFORMATION</Text><Text style={s.playerHeroName}>{selected.name}</Text><Text style={s.muted}>{selected.seasonName}</Text>{detail&&<><View style={s.dbOverallRow}><Text style={[s.dbOverall,{color:statColor(focusedOverall)}]}>{detail.primaryPosition} {focusedOverall}</Text>{detail.overallDelta+focusedOverallDelta>0&&<Text style={s.dbDelta}>+{detail.overallDelta+focusedOverallDelta}</Text>}{focusedOverallDelta>0&&<Text style={s.dbEstimate}>예상</Text>}</View><Text style={s.muted}>{detail.nation} · 급여 {detail.salary}</Text></>}</View><Pressable onPress={()=>void togglePlayerFavorite(selected.spId).then(setFavorites)} accessibilityLabel="선수 즐겨찾기"><Text style={s.favorite}>{favorites.includes(selected.spId)?"★":"☆"}</Text></Pressable></View>
+      <Pressable style={s.upgradeEntry} onPress={()=>setSimulatorOpen(true)} accessibilityRole="button" accessibilityLabel={`${selected.name} 강화 실험실 열기`}><View><Text style={s.upgradeEntryEyebrow}>UPGRADE LAB</Text><Text style={s.upgradeEntryTitle}>이 선수로 강화 도전</Text><Text style={s.upgradeEntryDescription}>게이지를 채우고 최고 강화 단계에 도전해 보세요.</Text></View><Text style={s.upgradeEntryArrow}>⚡ →</Text></Pressable>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.dbGradeRow}><Text style={s.dbGradeLabel}>강화</Text>{Array.from({length:13},(_,index)=>index+1).map(value=><Pressable key={value} style={[s.dbGrade,value===grade&&s.dbGradeActive]} onPress={()=>{setGrade(value);setDetailOptions({adaptation:1});setFocusedTraining({})}}><Text style={value===grade?s.dbGradeActiveText:s.muted}>+{value}</Text></Pressable>)}</ScrollView>
       {detailLoading&&<View style={s.loadingRow}><ActivityIndicator color={C.green}/><Text style={s.green}>능력치와 시세를 불러오는 중…</Text></View>}{error&&<Text style={s.error}>{error}</Text>}{detail?.degraded&&<Text style={s.warning}>데이터센터 형식 변경으로 일부 선수 정보만 표시합니다. 누락 항목: {detail.missingFields?.join(", ")||"상세 정보"}</Text>}
       {detail&&<><View style={s.dbTeamColor}><Text style={s.eyebrow}>TEAM COLOR DATABASE</Text><Text style={s.headingCompact}>능력치 적용 설정</Text><Text style={s.muted}>적응도와 팀컬러를 선택하면 기본 능력치 대비 상승값을 계산합니다.</Text><View style={s.dbSelectorGroup}><Text style={s.dbSelectorLabel}>적응도</Text><View style={s.dbSelectorRow}>{([1,5] as const).map(value=><Pressable key={value} style={[s.dbChoice,detailOptions.adaptation===value&&s.dbChoiceActive]} onPress={()=>setDetailOptions(current=>({...current,adaptation:value}))}><Text style={detailOptions.adaptation===value?s.dbChoiceActiveText:s.muted}>적응도 {value}</Text></Pressable>)}</View></View><TeamColorChoices label="강화 팀컬러" value={detailOptions.enhancementId?`${detailOptions.enhancementId}:${detailOptions.enhancementLevel??1}`:"0"} options={detail.teamColorOptions.enhancement.map(option=>({value:`${option.id}:${option.level}`,name:option.name}))} onChange={value=>{const [id,level]=value.split(":").map(Number);setDetailOptions(current=>({...current,enhancementId:id||0,enhancementLevel:level||0}))}}/><TeamColorChoices label="소속 팀컬러" value={detailOptions.affiliationId?`${detailOptions.affiliationId}:${detailOptions.affiliationLevel??1}`:"0"} options={detail.teamColorOptions.affiliation.map(option=>({value:`${option.id}:${option.level}`,name:option.name}))} onChange={value=>{const [id,level]=value.split(":").map(Number);setDetailOptions(current=>({...current,affiliationId:id||0,affiliationLevel:level||0}))}}/><TeamColorChoices label="관계·특성 팀컬러" value={String(detailOptions.featureId??0)} options={detail.teamColorOptions.feature.map(option=>({value:String(option.id),name:option.name}))} onChange={value=>setDetailOptions(current=>({...current,featureId:Number(value)}))}/></View><View style={s.dbPills}>{[detail.birthDate,detail.height,detail.weight,detail.bodyType,`개인기 ${"★".repeat(detail.skillMoves)}`].filter(Boolean).map(value=><Text style={s.dbPill} key={value}>{value}</Text>)}<FootRatings right={detail.rightFoot} left={detail.leftFoot}/></View><View style={s.dbSummary}>{detail.summaryAbilities.map(row=><View style={s.dbSummaryCell} key={row.label}><Text style={s.muted}>{row.label}</Text><View style={s.dbValueRow}><Text style={[s.dbAbilityValue,{color:statColor(row.value)}]}>{row.value}</Text>{row.delta>0&&<Text style={s.dbDelta}>+{row.delta}</Text>}</View></View>)}</View>
