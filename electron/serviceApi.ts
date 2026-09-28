@@ -11,6 +11,7 @@ import type {
   ClientErrorEvent,
   DiagnosticInfo,
 } from "../shared/contracts";
+import { matchPageLimit } from "../shared/matchPagination";
 
 const SERVICE_API = process.env.FC_ONLINE_API_BASE_URL?.trim() || "https://fc-online-lab-api.bebebe97.workers.dev";
 const CLIENT_VERSION = "desktop/0.1.0";
@@ -26,7 +27,7 @@ export async function fetchServiceDashboard(nickname: string, offset: number, ma
   const url = new URL("/v1/dashboard", SERVICE_API);
   url.searchParams.set("nickname", nickname);
   url.searchParams.set("offset", String(offset));
-  url.searchParams.set("limit", "20");
+  url.searchParams.set("limit", String(matchPageLimit(offset)));
   url.searchParams.set("matchtype", String(matchType));
   const body = await requestJson<DashboardResponse>(url, {
     timeoutMs: 35_000,

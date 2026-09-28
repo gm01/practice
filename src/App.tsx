@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatNexonDate } from "../shared/nexon";
+import { matchPageLimit, nextMatchPage } from "../shared/matchPagination";
 import { POSITION_COORDINATES } from "../shared/formation";
 import PlayerPhoto from "./components/PlayerPhoto";
 import appIcon from "./assets/app-icon.png";
@@ -577,8 +578,13 @@ export default function App() {
           (item) => `${item.matchId.slice(0, 8)}…: ${item.message}`,
         ),
       ]);
-      setNextOffset(offset + 20);
-      setHasMore(data.matches.length + data.failures.length === 20);
+      const page = nextMatchPage(
+        offset,
+        data.matches.length + data.failures.length,
+        matchPageLimit(offset),
+      );
+      setNextOffset(page.nextOffset);
+      setHasMore(page.hasMore);
       setView("matches");
       await window.fcOnline.saveSettings(nickname);
     } catch (reason) {
@@ -899,7 +905,7 @@ export default function App() {
                           disabled={loading}
                           onClick={() => void loadMatches(nextOffset)}
                         >
-                          {loading ? "불러오는 중…" : "20경기 더 보기 ↓"}
+                          {loading ? "불러오는 중…" : "10경기 더 보기 ↓"}
                         </button>
                       )}
                     </div>

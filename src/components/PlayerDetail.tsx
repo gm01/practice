@@ -69,7 +69,7 @@ export default function PlayerDetail({ matches, spId, side, onOpenMatch, onSearc
   return <section className="player-detail-page">
     <header className="player-detail-hero"><button className="player-detail-photo" onClick={()=>onSearchPlayer(report.player!.name)} aria-label={`${report.player.name} 시즌 카드 검색`}><PlayerPhoto player={report.player} showSeason/></button><div><p className="eyebrow">PLAYER REPORT</p><h1>{report.player.name}</h1><span>{report.player.seasonName} · {report.mainPosition} · +{report.player.grade}강</span></div><strong>{avgRating.toFixed(2)}<small>평균 평점</small></strong></header>
     <div className="player-detail-kpis">
-      <article><small>출전</small><b>{report.appearances.length}</b><span>최근 불러온 경기 기준</span></article>
+      <article><small>출전</small><b>{report.appearances.length}</b><span>불러온 {matches.length}경기 전체 기준</span></article>
       <article><small>골 · 도움</small><b>{report.goals} · {report.assists}</b><span>경기당 {((report.goals + report.assists) / report.appearances.length).toFixed(2)} 공격P</span></article>
       <article><small>슈팅</small><b>{report.shots}</b><span>유효 슈팅 {percent(report.effectiveShots, report.shots)}%</span></article>
       <article><small>패스 성공률</small><b>{percent(report.passSuccess, report.passTry)}%</b><span>{report.passSuccess}/{report.passTry}</span></article>

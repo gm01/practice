@@ -32,6 +32,7 @@ import { focusedTrainingOvr, orderedAbilityColumns, recommendedFocusedTraining }
 import { POSITION_COORDINATES, formationName, startingPlayers, substitutePlayers } from "../../shared/formation";
 import { compareAbility, setComparisonGrade } from "../../shared/comparison";
 import type { DiagnosticInfo, PlayerCatalogStatus } from "../../shared/contracts";
+import { matchPageLimit, nextMatchPage } from "../../shared/matchPagination";
 import { installMobileErrorHandler, reportMobileError, setRelatedRequestId } from "./src/telemetry";
 import { resolveBackAction } from "./src/navigation";
 import { analyzePlayStyle, dailyChallenge } from "./src/gamification";
@@ -251,7 +252,11 @@ function Home({
   onMatch,
   onPlayer,
   onRefresh,
+  onLoadMore,
   refreshing,
+  loadingMore,
+  hasMoreMatches,
+  loadMoreError,
   onExit,
   onFavorite,
 }: {
@@ -259,12 +264,20 @@ function Home({
   onMatch: (m: Match) => void;
   onPlayer: (id: number, side: Side) => void;
   onRefresh: () => void;
+  onLoadMore: () => void;
   refreshing: boolean;
+  loadingMore: boolean;
+  hasMoreMatches: boolean;
+  loadMoreError: string;
   onExit: () => void;
   onFavorite: () => void;
 }) {
-  const [range, setRange] = useState<5 | 10 | 20>(20);
+  const [range, setRange] = useState(20);
   const sample = data.matches.slice(0, range);
+  const ranges = [5, 10, 20, 30, 40, 50].filter(value => value <= data.matches.length || value === 20);
+  useEffect(() => {
+    if (data.matches.length > 0 && range > data.matches.length) setRange(Math.min(20, data.matches.length));
+  }, [data.matches.length, range]);
   const report = useMemo(() => {
     const wins = sample.filter((m) => m.result === "승").length,
       goals = sample.reduce((a, m) => a + m.myScore, 0),
@@ -285,7 +298,7 @@ function Home({
         assists: number;
       }
     >();
-    sample.forEach((m) =>
+    data.matches.forEach((m) =>
       m.players
         .filter((p) => p.rating > 0)
         .forEach((p) => {
@@ -308,7 +321,7 @@ function Home({
         (a, b) => b.games - a.games || b.rating / b.games - a.rating / a.games,
       )
       .slice(0, 8);
-  }, [sample]);
+  }, [data.matches]);
   return (
     <ScrollView
       contentContainerStyle={s.content}
@@ -363,7 +376,7 @@ function Home({
           <View style={s.challengeRow}><View style={s.challengeTrack}><View style={[s.challengeFill, { width: `${Math.round(challenge.progress / challenge.target * 100)}%` }]} /></View><Text style={s.challengeValue}>{challenge.progress}/{challenge.target}{challenge.unit}</Text></View>
         </View>
       </View>
-      <View style={s.reportHeading}><Text style={s.heading}>최근 {sample.length}경기 리포트</Text><View style={s.rangeRow}>{([5,10,20] as const).map(value=><Pressable key={value} style={[s.rangeChip,range===value&&s.rangeChipActive]} onPress={()=>setRange(value)}><Text style={range===value?s.filterTextActive:s.muted}>{value}</Text></Pressable>)}</View></View>
+      <View style={s.reportHeading}><Text style={s.heading}>최근 {sample.length}경기 리포트</Text><View style={s.rangeRow}>{ranges.map(value=><Pressable key={value} style={[s.rangeChip,range===value&&s.rangeChipActive]} onPress={()=>setRange(value)}><Text style={range===value?s.filterTextActive:s.muted}>{value}</Text></Pressable>)}</View></View>
       <View style={s.grid}>
         <Kpi
           label="승률"
@@ -389,7 +402,7 @@ function Home({
           note="전체 슈팅 기준"
         />
       </View>
-      <Text style={s.heading}>선수 누적</Text>
+      <View style={s.reportHeading}><Text style={s.heading}>선수 누적</Text><Text style={[s.muted,{marginBottom:13}]}>불러온 {data.matches.length}경기 전체</Text></View>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -433,6 +446,18 @@ function Home({
           <Text style={s.arrow}>→</Text>
         </Pressable>
       ))}
+      {loadMoreError ? <Text style={s.warning}>{loadMoreError}</Text> : null}
+      {hasMoreMatches && (
+        <Pressable
+          style={[s.mobileSeasonMore, loadingMore && s.disabled]}
+          onPress={onLoadMore}
+          disabled={loadingMore}
+          accessibilityRole="button"
+          accessibilityLabel="이전 경기 10경기 더 불러오기"
+        >
+          {loadingMore ? <ActivityIndicator color={C.green} /> : <Text style={s.green}>10경기 더 보기 · 최대 50경기</Text>}
+        </Pressable>
+      )}
       {data.warnings.length > 0 && (
         <Text style={s.warning}>
           일부 경기 {data.warnings.length}건을 불러오지 못했습니다.
@@ -699,8 +724,13 @@ function PlayerScreen({
   const goals = rows.reduce((a, r) => a + r.player.goals, 0),
     assists = rows.reduce((a, r) => a + r.player.assists, 0),
     shots = rows.reduce((a, r) => a + r.player.shots, 0),
+    effectiveShots = rows.reduce((a, r) => a + r.player.effectiveShots, 0),
     passTry = rows.reduce((a, r) => a + r.player.passTry, 0),
     passSuccess = rows.reduce((a, r) => a + r.player.passSuccess, 0);
+  const results = rows.map(({ match }) => side === "mine" ? match.result : match.result === "승" ? "패" : match.result === "패" ? "승" : "무");
+  const wins = results.filter(result => result === "승").length;
+  const draws = results.filter(result => result === "무").length;
+  const losses = results.filter(result => result === "패").length;
   return (
     <ScrollView contentContainerStyle={s.content}>
       <View style={s.playerHero}>
@@ -722,20 +752,19 @@ function PlayerScreen({
           {average(rows.map((r) => r.player.rating)).toFixed(2)}
         </Text>
       </View>
+      <View style={s.reportHeading}><Text style={s.heading}>누적 기록</Text><Text style={[s.muted,{marginBottom:13}]}>불러온 {matches.length}경기 전체 기준</Text></View>
       <View style={s.grid}>
-        <Kpi label="출전" value={`${rows.length}`} note="불러온 경기" />
+        <Kpi label="출전" value={`${rows.length}`} note={`${wins}승 ${draws}무 ${losses}패`} />
+        <Kpi label="평균 평점" value={average(rows.map(row => row.player.rating)).toFixed(2)} note="전체 출전 평균" />
         <Kpi
           label="골 · 도움"
           value={`${goals} · ${assists}`}
           note={`경기당 ${((goals + assists) / rows.length).toFixed(2)}P`}
         />
         <Kpi
-          label="슈팅"
-          value={`${shots}`}
-          note={`유효 ${percent(
-            rows.reduce((a, r) => a + r.player.effectiveShots, 0),
-            shots,
-          )}%`}
+          label="슈팅 · 유효"
+          value={`${shots} · ${effectiveShots}`}
+          note={`유효 슈팅 ${percent(effectiveShots, shots)}%`}
         />
         <Kpi
           label="패스"
@@ -980,7 +1009,7 @@ function PlayerDatabase({ matches, onBack, onHeaderBackChange, initialQuery = ""
         <Text style={s.heading}>포지션별 오버롤</Text><View style={s.dbStatGrid}>{detail.positions.map(row=>{const value=focusedTrainingOvr(row.position,row.value,detail.abilities,focusedTraining),delta=row.delta+value-row.value;return <View style={s.dbStat} key={row.position}><Text style={s.muted}>{row.position}</Text><View style={s.dbValueRow}><Text style={[s.dbAbilityValue,{color:statColor(value)}]}>{value}</Text>{delta>0&&<Text style={s.dbDelta}>+{delta}</Text>}</View></View>})}</View>
         <View style={s.dbTrainingHeading}><View style={s.flex}><Text style={s.heading}>세부 능력치 · 집중훈련</Text><Text style={s.muted}>능력치별 최대 +2 · {trainingLimit}개까지 선택 가능</Text><Text style={s.dbEstimateNote}>포지션 가중치와 0.75 반올림 기준 예상치입니다.</Text></View><Text style={s.dbTrainingCount}>{trainedCount}/{trainingLimit}</Text><View style={s.dbTrainingActions}><Pressable style={s.dbTrainingReset} onPress={()=>setFocusedTraining(recommendedFocusedTraining(detail.primaryPosition,detail.abilities,trainingLimit))}><Text style={s.dbTrainingResetText}>추천</Text></Pressable><Pressable style={[s.dbTrainingReset,trainedCount===0&&s.dbTrainingDisabled]} onPress={()=>setFocusedTraining({})} disabled={trainedCount===0}><Text style={s.dbTrainingResetText}>초기화</Text></Pressable></View></View><View style={s.dbAbilityGrid}>{abilityColumns.map((column,columnIndex)=><View style={s.dbAbilityColumn} key={columnIndex}>{column.map(row=>{const training=focusedTraining[row.label]??0,totalDelta=row.delta+training,value=row.value+training,canAdd=training<2&&(training>0||trainedCount<trainingLimit);return <View style={[s.dbAbility,row.delta>0&&s.dbAbilityBoosted,training>0&&s.dbAbilityTrained]} key={row.label}><Text style={s.muted}>{row.label}</Text><View style={s.dbTrainingValue}><View style={s.dbValueRow}><Text style={[s.dbPurple,{color:statColor(value)}]}>{value}</Text>{totalDelta>0&&<Text style={s.dbDelta}>+{totalDelta}</Text>}</View><View style={s.dbTrainingControls}><Pressable style={[s.dbTrainingButton,training===0&&s.dbTrainingDisabled]} onPress={()=>changeFocusedTraining(row.label,-1)} disabled={training===0} accessibilityLabel={`${row.label} 집중훈련 감소`}><Text style={s.dbTrainingButtonText}>−</Text></Pressable><Text style={s.dbTrainingLevel}>{training}</Text><Pressable style={[s.dbTrainingButton,!canAdd&&s.dbTrainingDisabled]} onPress={()=>changeFocusedTraining(row.label,1)} disabled={!canAdd} accessibilityLabel={`${row.label} 집중훈련 증가`}><Text style={s.dbTrainingButtonText}>＋</Text></Pressable></View></View></View>})}</View>)}</View>
         <Text style={s.heading}>클럽 경력</Text><View style={s.dbPanel}>{detail.clubCareer.length?<><View style={[s.dbClub,s.dbClubHeader]}><Text style={s.dbClubYears}>기간</Text><Text style={s.dbClubName}>클럽</Text><Text style={s.dbClubLoan}>구분</Text></View>{sortedClubCareer(detail.clubCareer).map((row,index)=><View style={s.dbClub} key={`${row.years}-${row.club}-${index}`}><Text style={s.dbClubYears}>{row.years}</Text><Text style={s.dbClubName} numberOfLines={2}>{row.club}</Text><Text style={s.dbClubLoan}>{row.loan}</Text></View>)}</>:<Text style={s.muted}>등록된 클럽 경력이 없습니다.</Text>}</View></>}
-      <Text style={s.heading}>내 경기 기록</Text>{appearances.length?<View style={s.grid}><Kpi label="출전" value={`${appearances.length}`} note="조회 경기 기준"/><Kpi label="평균 평점" value={average(appearances.map(row=>row.player.rating)).toFixed(2)} note="내 경기 기록"/><Kpi label="골·도움" value={`${appearances.reduce((a,r)=>a+r.player.goals,0)} · ${appearances.reduce((a,r)=>a+r.player.assists,0)}`} note="누적 기록"/><Kpi label="사용 강화" value={`+${appearances[0].player.grade}`} note="사용 카드"/></View>:<Text style={s.warning}>현재 조회한 최근 경기에서는 이 시즌 카드의 출전 기록이 없습니다.</Text>}<Text style={s.dbNotice}>Data based on NEXON Open API · 선수 상세 정보는 EA SPORTS FC ONLINE 데이터센터 기반입니다.</Text></ScrollView>;
+      <Text style={s.heading}>내 경기 기록</Text>{appearances.length?<View style={s.grid}><Kpi label="출전" value={`${appearances.length}`} note={`불러온 ${matches.length}경기 전체 기준`}/><Kpi label="평균 평점" value={average(appearances.map(row=>row.player.rating)).toFixed(2)} note="전체 출전 평균"/><Kpi label="골·도움" value={`${appearances.reduce((a,r)=>a+r.player.goals,0)} · ${appearances.reduce((a,r)=>a+r.player.assists,0)}`} note="누적 기록"/><Kpi label="사용 강화" value={`+${appearances[0].player.grade}`} note="사용 카드"/></View>:<Text style={s.warning}>현재 불러온 경기에서는 이 시즌 카드의 출전 기록이 없습니다.</Text>}<Text style={s.dbNotice}>Data based on NEXON Open API · 선수 상세 정보는 EA SPORTS FC ONLINE 데이터센터 기반입니다.</Text></ScrollView>;
   }
   const listHeader=<View><Text style={s.eyebrow}>PLAYER INFORMATION</Text><Text style={s.playerHeroName}>선수 정보</Text><Text style={s.subtitle}>선수명 또는 조건으로 시즌 카드를 찾고 능력치·시세·내 경기 기록을 확인합니다.</Text><View style={s.dbSearch}><TextInput style={[s.input,s.flex]} value={query} onChangeText={setQuery} returnKeyType="search" onSubmitEditing={()=>void run()} accessibilityLabel="선수명 검색"/><Pressable style={s.dbSearchButton} onPress={()=>void run()}><Text style={s.primaryText}>검색</Text></Pressable></View><Pressable style={[s.mobileFilterToggle,(filtersOpen||mobileHasFilters(filters))&&s.mobileFilterToggleActive]} onPress={()=>setFiltersOpen(value=>!value)} accessibilityRole="button" accessibilityState={{expanded:filtersOpen}}><Text style={s.mobileFilterToggleText}>조건 검색</Text><Text style={s.mobileFilterToggleState}>{filtersOpen?"접기":mobileHasFilters(filters)?"적용 중":"열기"}</Text></Pressable>{filtersOpen&&<MobilePlayerFilters value={filters} meta={filterMeta} onChange={setFilters} onReset={()=>setFilters({...MOBILE_DEFAULT_FILTERS})} onApply={()=>void run()}/>} {loading&&pageRef.current===0&&<ActivityIndicator color={C.green} style={{marginTop:24}}/>}{error&&<Text style={s.error}>{error}</Text>}{catalog?.source==="fallback"&&<Text style={s.warning}>공식 데이터센터 응답이 불안정하여 마지막 저장 데이터를 표시합니다.</Text>}{compare.length===1&&<Text style={s.compareHint}>{compare[0].name} 선택됨 · 비교할 선수를 한 명 더 선택하세요.</Text>}{compare.length===2&&<MobilePlayerComparison cards={compare as [PlayerCard,PlayerCard]} onClose={()=>setCompare([])}/>} {!loading&&(query||mobileHasFilters(filters))&&rows.length===0&&!error&&<Text style={s.warning}>검색 결과가 없습니다.</Text>}{rows.length>0&&<View style={s.dbResultsHeading}><View><Text style={s.headingCompact}>검색 결과</Text><Text style={s.muted}>{resultTotal.toLocaleString("ko-KR")}개 중 {rows.length}개</Text></View><Pressable style={s.dbResultsEdit} onPress={()=>setFiltersOpen(true)}><Text style={s.green}>조건 수정</Text></Pressable></View>}</View>;
   return <FlatList data={rows} keyExtractor={card=>String(card.spId)} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled" initialNumToRender={10} maxToRenderPerBatch={10} windowSize={7} removeClippedSubviews={Platform.OS==="android"} ListHeaderComponent={listHeader} renderItem={({item:card})=><Pressable style={s.dbRow} onPress={()=>choose(card)} accessibilityLabel={`${card.name}, ${card.seasonName}, ${card.primaryPosition}, 급여 ${card.salary||"정보 없음"}, OVR ${card.overall||"정보 없음"}, ${card.grade||1}강`}><CardImage card={card}/><View style={s.flex}><View style={s.dbResultNameRow}><SeasonIcon card={card}/><Text style={[s.playerName,s.dbResultPlayerName]} numberOfLines={1}>{card.name}</Text><FootRatings right={card.rightFoot} left={card.leftFoot}/></View><View style={s.dbCompactMeta}><Text style={s.dbPosition}>{card.primaryPosition||"-"}</Text><Text style={s.dbSalary}>급여 {card.salary||"-"}</Text><Text style={s.dbOvr}>OVR {card.overall||"-"}</Text><Text style={s.dbGradeBadge}>{card.grade||1}강</Text></View></View><View style={s.dbResultActions}><Text style={s.favorite}>{favorites.includes(card.spId)?"★":"☆"}</Text><Pressable style={[s.compareChoice,compare.some(item=>item.spId===card.spId)&&s.compareChoiceActive]} onPress={event=>{event.stopPropagation();toggleCompare(card)}} accessibilityLabel={`${card.name} 비교 선택`}><Text style={compare.some(item=>item.spId===card.spId)?s.compareChoiceTextActive:s.compareChoiceText}>{compare.some(item=>item.spId===card.spId)?"선택":"비교"}</Text></Pressable></View></Pressable>} onEndReachedThreshold={0.35} onEndReached={()=>{if(hasMore&&!loading)void runSearch(query,filters,true)}} ListFooterComponent={<View>{loading&&pageRef.current>0&&<ActivityIndicator color={C.green} style={{marginVertical:20}}/>}{hasMore&&!loading&&<Pressable style={s.mobileSeasonMore} onPress={()=>void runSearch(query,filters,true)}><Text style={s.green}>다음 선수 더 보기</Text></Pressable>}{catalog?.updatedAt&&<Text style={[s.muted,{textAlign:"center",marginTop:18}]}>선수 데이터 최근 갱신 {new Date(catalog.updatedAt).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"})}</Text>}</View>}/>;
@@ -990,6 +1019,10 @@ export default function App() {
   const [nickname, setNickname] = useState(""),
     [data, setData] = useState<Dashboard | null>(null),
     [loading, setLoading] = useState(false),
+    [loadingMore, setLoadingMore] = useState(false),
+    [hasMoreMatches, setHasMoreMatches] = useState(false),
+    [nextMatchOffset, setNextMatchOffset] = useState(0),
+    [loadMoreError, setLoadMoreError] = useState(""),
     [progress, setProgress] = useState(0),
     [error, setError] = useState(""),
     [match, setMatch] = useState<Match | null>(null),
@@ -1031,10 +1064,19 @@ export default function App() {
     dashboardAbortRef.current=controller;
     setNickname(target);
     setLoading(true);
+    setLoadingMore(false);
     setError("");
+    setLoadMoreError("");
     try {
-      const next = await fetchDashboard(target,controller.signal);
-      if(dashboardAbortRef.current===controller){setData(next);setSearches(await rememberSearch(next.profile.nickname))}
+      const limit = matchPageLimit(0);
+      const next = await fetchDashboard(target,{offset:0,limit,signal:controller.signal});
+      if(dashboardAbortRef.current===controller){
+        const page = nextMatchPage(0,next.matches.length+next.warnings.length,limit);
+        setData(next);
+        setNextMatchOffset(page.nextOffset);
+        setHasMoreMatches(page.hasMore);
+        setSearches(await rememberSearch(next.profile.nickname));
+      }
     } catch (e) {
       if(dashboardAbortRef.current===controller&&(e as {kind?:string})?.kind!=="cancelled") {
         setError(e instanceof Error ? e.message : "전적 조회 실패");
@@ -1042,6 +1084,38 @@ export default function App() {
       }
     } finally {
       if(dashboardAbortRef.current===controller){dashboardAbortRef.current=null;setProgress(100);setLoading(false)}
+    }
+  }
+  async function loadMoreMatches() {
+    if(!data||loading||loadingMore||!hasMoreMatches)return;
+    const limit=matchPageLimit(nextMatchOffset);
+    if(!limit){setHasMoreMatches(false);return}
+    dashboardAbortRef.current?.abort();
+    const controller=new AbortController();
+    dashboardAbortRef.current=controller;
+    setLoadingMore(true);
+    setLoadMoreError("");
+    try{
+      const next=await fetchDashboard(data.profile.nickname,{offset:nextMatchOffset,limit,signal:controller.signal});
+      if(dashboardAbortRef.current===controller){
+        const page=nextMatchPage(nextMatchOffset,next.matches.length+next.warnings.length,limit);
+        setData(current=>current?{
+          ...current,
+          profile:next.profile,
+          matches:[...current.matches,...next.matches].filter((match,index,rows)=>rows.findIndex(row=>row.id===match.id)===index),
+          warnings:[...current.warnings,...next.warnings],
+        }:next);
+        setNextMatchOffset(page.nextOffset);
+        setHasMoreMatches(page.hasMore);
+      }
+    }catch(e){
+      if(dashboardAbortRef.current===controller&&(e as {kind?:string})?.kind!=="cancelled"){
+        setLoadMoreError(e instanceof Error?e.message:"추가 경기 조회에 실패했습니다.");
+        void reportMobileError(e,"DASHBOARD_MORE_REQUEST_ERROR","dashboard");
+      }
+    }finally{
+      if(dashboardAbortRef.current===controller)dashboardAbortRef.current=null;
+      setLoadingMore(false);
     }
   }
   async function favorite() {
@@ -1124,6 +1198,10 @@ export default function App() {
               onPlayer={(id, side) => setPlayer({ id, side })}
               refreshing={loading}
               onRefresh={() => void load(data.profile.nickname)}
+              onLoadMore={() => void loadMoreMatches()}
+              loadingMore={loadingMore}
+              hasMoreMatches={hasMoreMatches}
+              loadMoreError={loadMoreError}
               onExit={() => setData(null)}
               onFavorite={() => void favorite()}
             />
