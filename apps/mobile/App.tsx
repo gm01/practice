@@ -423,7 +423,20 @@ function Home({
           </Pressable>
         ))}
       </ScrollView>
-      <Text style={s.heading}>최근 경기</Text>
+      <View style={s.reportHeading}>
+        <Text style={s.heading}>최근 경기 · {data.matches.length}</Text>
+        {hasMoreMatches && (
+          <Pressable
+            style={s.dbResultsEdit}
+            onPress={onLoadMore}
+            disabled={loadingMore}
+            accessibilityRole="button"
+            accessibilityLabel="이전 경기 10경기 더 불러오기"
+          >
+            <Text style={s.green}>{loadingMore ? "불러오는 중…" : "+10경기"}</Text>
+          </Pressable>
+        )}
+      </View>
       {data.matches.map((m, i) => (
         <Pressable
           style={s.matchRow}
